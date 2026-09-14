@@ -1,0 +1,25 @@
+# Managed by scripts/package and make menuconfig.
+# Reseed defaults with: scripts/package init --force
+CONFIG_PACKAGE_firmware-linux=y
+CONFIG_PACKAGE_sudo=y
+CONFIG_PACKAGE_systemd-resolved=y
+CONFIG_PACKAGE_dbus=y
+CONFIG_PACKAGE_openssh-server=y
+CONFIG_PACKAGE_openssh-client=y
+CONFIG_PACKAGE_iproute2=y
+CONFIG_PACKAGE_net-tools=y
+CONFIG_PACKAGE_ethtool=y
+CONFIG_PACKAGE_curl=y
+CONFIG_PACKAGE_wget=y
+CONFIG_PACKAGE_rsync=y
+CONFIG_PACKAGE_ca-certificates=y
+CONFIG_PACKAGE_less=y
+CONFIG_PACKAGE_nano=y
+CONFIG_PACKAGE_vim-tiny=y
+CONFIG_PACKAGE_man-db=y
+CONFIG_PACKAGE_procps=y
+CONFIG_PACKAGE_psmisc=y
+CONFIG_PACKAGE_apt-utils=y
+CONFIG_PACKAGE_dialog=y
+CONFIG_PACKAGE_whiptail=y
+CONFIG_PACKAGE_lsb-release=y

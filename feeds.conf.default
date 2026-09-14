@@ -1,0 +1,17 @@
+# OpenWrt-style feed definitions for the debian-live SDK.
+#
+# Each feed is a layer that contributes live-build config fragments:
+#   package-lists/   extra *.list.chroot package lists
+#   hooks/           extra *.chroot hooks (run alphabetically)
+#   includes.chroot/ files merged into the target root filesystem
+#   includes.binary/ files merged into the ISO tree
+#   bootloaders/     isolinux/syslinux template overrides
+#
+# Copy this file to feeds.conf to customize. Feeds install in listed order,
+# later feeds override earlier ones on conflicting paths.
+#
+#   src-link <name> <local path>   use a local directory (relative to top dir)
+#   src-git  <name> <git url>[;branch]  clone/update from git on feeds update
+
+src-link base ./layers/base
+src-link local ./layers/local

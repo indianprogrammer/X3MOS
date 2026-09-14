@@ -1,0 +1,284 @@
+#!/bin/bash
+# Interactive SDK configuration (OpenWrt-style `make menuconfig`).
+#
+# Usage: ./scripts/menuconfig [--help]
+# Edits .config via whiptail dialogs. Run `make defconfig` first if you
+# have no .config yet (this script does that automatically).
+
+source "$(dirname "$0")/common.sh"
+[[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && usage
+
+have whiptail || die "whiptail missing (sudo apt-get install whiptail), cannot show menus"
+cd "$PROJECT_DIR"
+[[ -f .config ]] || { "$SDK_DIR/kconfig" defconfig; }
+
+# shellcheck disable=SC1091
+source .config
+
+V_ISO_NAME="${CONFIG_SDK_ISO_NAME:-debian-trixie-cli-amd64.hybrid.iso}"
+V_ISO_VOLUME="${CONFIG_SDK_ISO_VOLUME:-Debian-Live-Trixie-CLI}"
+V_ISO_APP="${CONFIG_SDK_ISO_APPLICATION:-Debian Trixie Live (CLI, no GUI)}"
+V_BOOTLOADER="${CONFIG_SDK_BOOTLOADER:-syslinux}"
+V_MEMTEST="${CONFIG_SDK_MEMTEST:-none}"
+V_BOOT_TIMEOUT="${CONFIG_SDK_BOOT_TIMEOUT:-420}"
+V_QEMU_MEM="${CONFIG_SDK_QEMU_MEM:-2048}"
+
+ask_string() { # title prompt current -> prints new value (empty on cancel)
+    local out rc
+    out="$(whiptail --title "$1" --inputbox "$2" 10 70 "$3" 3>&1 1>&2 2>&3)" || { echo ""; return 0; }
+    printf '%s' "$out"
+}
+
+pkg_selected() { # print selected package names, one per line
+    grep -E '^CONFIG_PACKAGE_.+=y$' .config.packages 2>/dev/null \
+        | sed 's/^CONFIG_PACKAGE_//; s/=y$//' | sort -u
+}
+
+# Generic package checklist: TSV lines "name|ver|sec|desc" on stdin.
+# Shows ON for currently selected, applies deselect/select afterwards.
+pkg_checklist() { # title text ; TSV "name|ver|sec|desc" on stdin
+    local tmp chosen before after shown x
+    tmp="$(mktemp)"
+    cat > "$tmp.tsv"
+    local args=() tags=()
+    while IFS='|' read -r n v sec d; do
+        [[ "$n" == \#* || -z "$n" ]] && continue
+        if grep -qxF "CONFIG_PACKAGE_$n=y" .config.packages 2>/dev/null; then st=ON; else st=OFF; fi
+        args+=("$n" "${d:0:60}" "$st")
+        tags+=("$n")
+    done < "$tmp.tsv"
+    rm -f "$tmp.tsv"
+    [[ "${#args[@]}" -eq 0 ]] && { whiptail --msgbox "No packages to show." 8 50; return 0; }
+    chosen="$(whiptail --title "$1" --checklist "$2" 22 78 15 "${args[@]}" 3>&1 1>&2 2>&3)" \
+        || return 0
+    before="$(pkg_selected | sort -u)"
+    after="$(echo "$chosen" | tr -d '"' | tr ' ' '\n' | grep -v '^$' | sort -u)"
+    shown="$(printf '%s\n' "${tags[@]}" | sort -u)"
+    local to_del to_add errs=""
+    # Only packages actually shown may be deselected; unshown ones stay.
+    to_del="$(comm -23 <(echo "$before") <(echo "$after") | grep -Fxf <(echo "$shown") || true)"
+    to_add="$(comm -13 <(echo "$before") <(echo "$after") || true)"
+    for x in $to_del; do
+        # only consider packages that were shown in this dialog
+        grep -q . <<< "$x" || continue
+        if ! ./scripts/package del "$x" --yes >/tmp/pkgapply.log 2>&1; then
+            errs="$errs$x: $(grep -a ERROR /tmp/pkgapply.log | head -1 | sed 's/.*ERROR: //')\n"
+        fi
+    done
+    if [[ -n "$to_add" ]]; then
+        # shellcheck disable=SC2086
+        if ! ./scripts/package add $to_add --yes >/tmp/pkgapply.log 2>&1; then
+            errs="${errs}add failed: $(tail -2 /tmp/pkgapply.log | tr '\n' ' ')\n"
+        fi
+    fi
+    if [[ -n "$errs" ]]; then
+        whiptail --title "Package changes" --msgbox "Applied with problems:\n\n$(echo -e "$errs")" 14 70
+    else
+        ok "package selection updated ($(pkg_selected | wc -l) selected)"
+    fi
+    rm -f /tmp/pkgapply.log
+}
+
+os_selected_count() { # kept + auto-present internal pkgs
+    ./scripts/package os-list --tsv 2>/dev/null | awk -F'\t' '$7 != "removed"' | wc -l
+}
+
+os_removed_count() {
+    grep -cE '^# CONFIG_OS_.+ is not set' .config.os-packages 2>/dev/null || true
+}
+
+# OS-internal checklist: TSV lines "name|ver|sec|pri|ess|cat|state|desc".
+# ON = present (user/kept/auto), OFF = removed. Applies via os-add/os-del.
+os_checklist() { # title text ; TSV on stdin
+    local tmp chosen x
+    tmp="$(mktemp)"
+    cat > "$tmp.tsv"
+    local args=() tags=()
+    while IFS='|' read -r n v sec pri ess cat state d; do
+        [[ "$n" == \#* || -z "$n" ]] && continue
+        if [[ "$state" == "removed" ]]; then st=OFF; else st=ON; fi
+        args+=("$n" "[$cat] ${d:0:52}" "$st")
+        tags+=("$n")
+    done < "$tmp.tsv"
+    rm -f "$tmp.tsv"
+    [[ "${#args[@]}" -eq 0 ]] && { whiptail --msgbox "No packages to show." 8 50; return 0; }
+    chosen="$(whiptail --title "$1" --checklist "$2" 22 78 15 "${args[@]}" 3>&1 1>&2 2>&3)" \
+        || return 0
+    local before after shown
+    before="$(./scripts/package os-list --tsv 2>/dev/null | awk -F'\t' '$7 != "removed" {print $1}' | sort -u)"
+    after="$(echo "$chosen" | tr -d '"' | tr ' ' '\n' | grep -v '^$' | sort -u)"
+    shown="$(printf '%s\n' "${tags[@]}" | sort -u)"
+    local to_del to_add errs=""
+    to_del="$(comm -23 <(echo "$before") <(echo "$after") | grep -Fxf <(echo "$shown") || true)"
+    to_add="$(comm -13 <(echo "$before") <(echo "$after") || true)"
+    for x in $to_del; do
+        grep -q . <<< "$x" || continue
+        if ! ./scripts/package os-del "$x" --yes >/tmp/ospapply.log 2>&1; then
+            errs="$errs$x: $(grep -a ERROR /tmp/ospapply.log | head -1 | sed 's/.*ERROR: //')\n"
+        fi
+    done
+    if [[ -n "$to_add" ]]; then
+        # shellcheck disable=SC2086
+        if ! ./scripts/package os-add $to_add --yes >/tmp/ospapply.log 2>&1; then
+            errs="${errs}os-add failed: $(tail -2 /tmp/ospapply.log | tr '\n' ' ')\n"
+        fi
+    fi
+    if [[ -n "$errs" ]]; then
+        whiptail --title "OS package changes" --msgbox "Applied with problems:\n\n$(echo -e "$errs")" 14 70
+    else
+        ok "OS selection updated ($(os_removed_count) removed)"
+    fi
+    rm -f /tmp/ospapply.log
+}
+
+os_menu() {
+    [[ -f .config.os-packages ]] || ./scripts/package os-init
+    while true; do
+        local kept rem choice
+        kept="$(os_selected_count)"
+        rem="$(os_removed_count)"
+        choice="$(whiptail --title "OS internal packages ($kept present, $rem removed)" --menu \
+            "Base system, live plumbing, kernel/firmware. Essential and boot-critical items are guarded;" \
+            22 78 12 \
+            "1" "Browse by category (essential/base/live/kernel/...)" \
+            "2" "Search OS packages" \
+            "3" "Show removed packages" \
+            "4" "Check OS dependencies" \
+            "5" "Back" \
+            3>&1 1>&2 2>&3)" || return 0
+        case "$choice" in
+            1) local cat
+               cat="$(whiptail --title "OS category" --menu "Choose a category:" 20 70 10 \
+                   "essential" "Essential=yes (guarded, --force to remove)" \
+                   "base" "required/important debootstrap base" \
+                   "live-boot" "live boot plumbing (boot-critical locked)" \
+                   "live-docs" "live manuals (safe to remove)" \
+                   "kernel" "kernel/firmware/microcode" \
+                   "standard" "priority standard" \
+                   "other" "everything else installed" \
+                   3>&1 1>&2 2>&3)" || continue
+               [[ -z "$cat" ]] && continue
+               ./scripts/package os-list --tsv --category "$cat" | sed 's/\t/|/g' | \
+                   os_checklist "OS: $cat" "SPACE toggles, ENTER applies (ON=present):" ;;
+            2) local term res
+               term="$(whiptail --title "Search OS packages" --inputbox "Search term (name or description):" 10 60 3>&1 1>&2 2>&3)" || continue
+               [[ -z "$term" ]] && continue
+               res="$(./scripts/package os-list --tsv --search "$term")"
+               [[ -z "$res" ]] && { whiptail --msgbox "No matches for '$term'." 8 50; continue; }
+               echo "$res" | sed 's/\t/|/g' | \
+                   os_checklist "OS results" "Results for '$term' (SPACE selects, ON=present):" ;;
+            3) ./scripts/package os-list --tsv | awk -F'\t' '$7 == "removed"' | sed 's/\t/|/g' | \
+                   os_checklist "Removed OS packages" "Untick removal = keep again (ON=present):" ;;
+            4) ./scripts/package os-check > /tmp/oscheck.log 2>&1
+               whiptail --title "OS dependency check" --textbox /tmp/oscheck.log 20 78
+               rm -f /tmp/oscheck.log ;;
+            5) return 0 ;;
+        esac
+    done
+}
+
+pkg_menu() {
+    while true; do
+        local n choice
+        n="$(pkg_selected | wc -l)"
+        choice="$(whiptail --title "Package selection ($n selected)" --menu \
+            "Toggle applications and OS components. Dependencies are resolved automatically;" \
+            20 78 10 \
+            "1" "Toggle selected packages" \
+            "2" "Add package (search archive)" \
+            "3" "Browse by section" \
+            "4" "Check dependencies" \
+            "5" "OS internal packages >>>" \
+            "6" "Back" \
+            3>&1 1>&2 2>&3)" || return 0
+        case "$choice" in
+            1) ./scripts/package list --tsv | sed 's/\t/|/g' | \
+                   pkg_checklist "Toggle packages" "SPACE toggles, ENTER applies:" ;;
+            2) local term res
+               term="$(whiptail --title "Add package" --inputbox "Search term (name or description):" 10 60 3>&1 1>&2 2>&3)" || continue
+               [[ -z "$term" ]] && continue
+               res="$(./scripts/package list --tsv --search "$term")"
+               [[ -z "$res" ]] && { whiptail --msgbox "No matches for '$term'." 8 50; continue; }
+               echo "$res" | sed 's/\t/|/g' | \
+                   pkg_checklist "Add packages" "Results for '$term' (SPACE selects):" ;;
+            3) local seclist sec
+               seclist="$(./scripts/package list --sections)"
+               [[ -z "$seclist" ]] && { whiptail --msgbox "No sections found." 8 50; continue; }
+               sec="$(whiptail --title "Browse by section" --menu "Choose a section:" 24 70 16 \
+                   $(echo "$seclist" | awk -F'\t' '{print $1, $2" pkgs"}') \
+                   3>&1 1>&2 2>&3)" || continue
+               [[ -z "$sec" ]] && continue
+               ./scripts/package list --tsv --section "$sec" | \
+                   awk -F'\t' -v s="$sec" '{print $1"|"$2"|"s"|"$3}' | \
+                   pkg_checklist "Section: $sec" "SPACE toggles, ENTER applies:" ;;
+            4) ./scripts/package check > /tmp/pkgcheck.log 2>&1
+               whiptail --title "Dependency check" --textbox /tmp/pkgcheck.log 20 78
+               rm -f /tmp/pkgcheck.log ;;
+            5) os_menu ;;
+            6) return 0 ;;
+        esac
+    done
+}
+
+while true; do
+    choice="$(whiptail --title "debian-live SDK configuration" --menu \
+        "Select an option (<Enter> to edit, Done writes .config):" 20 76 10 \
+        "1" "ISO filename      : $V_ISO_NAME" \
+        "2" "ISO volume id     : $V_ISO_VOLUME" \
+        "3" "ISO application   : $V_ISO_APP" \
+        "4" "Bootloader        : $V_BOOTLOADER" \
+        "5" "Memtest entry     : $V_MEMTEST" \
+        "6" "Boot-test timeout : ${V_BOOT_TIMEOUT}s" \
+        "7" "Boot-test RAM     : ${V_QEMU_MEM} MB" \
+        "8" "Package selection >>>" \
+        "9" "Done (write .config and exit)" \
+        3>&1 1>&2 2>&3)" || exit 0
+    case "$choice" in
+        1) v="$(ask_string "ISO filename" "Output filename for the finished image:" "$V_ISO_NAME")"
+           [[ -n "$v" ]] && V_ISO_NAME="$v" ;;
+        2) v="$(ask_string "ISO volume id" "ISO volume id (max 32 chars):" "$V_ISO_VOLUME")"
+           if [[ -n "$v" ]]; then
+               [[ "${#v}" -le 32 ]] || { whiptail --msgbox "Volume id must be 32 chars or fewer." 8 60; continue; }
+               V_ISO_VOLUME="$v"
+           fi ;;
+        3) v="$(ask_string "ISO application" "ISO application id string:" "$V_ISO_APP")"
+           [[ -n "$v" ]] && V_ISO_APP="$v" ;;
+        4) v="$(whiptail --title "Bootloader" --radiolist \
+               "syslinux: BIOS boot, USB+CD hybrid (recommended).\ngrub2: El Torito CD boot only with this live-build vintage." \
+               14 76 2 \
+               "syslinux" "" $([[ "$V_BOOTLOADER" == "syslinux" ]] && echo ON || echo OFF) \
+               "grub2" "" $([[ "$V_BOOTLOADER" == "grub2" ]] && echo ON || echo OFF) \
+               3>&1 1>&2 2>&3)" || continue
+           [[ -n "$v" ]] && V_BOOTLOADER="$v" ;;
+        5) v="$(whiptail --title "Memtest entry" --radiolist "Memtest86+ boot menu entry:" 12 70 2 \
+               "none" "" $([[ "$V_MEMTEST" == "none" ]] && echo ON || echo OFF) \
+               "memtest86+" "" $([[ "$V_MEMTEST" == "memtest86+" ]] && echo ON || echo OFF) \
+               3>&1 1>&2 2>&3)" || continue
+           [[ -n "$v" ]] && V_MEMTEST="$v" ;;
+        6) v="$(ask_string "Boot-test timeout" "Seconds to wait for the boot test:" "$V_BOOT_TIMEOUT")"
+           [[ "$v" =~ ^[0-9]+$ ]] && V_BOOT_TIMEOUT="$v" || [[ -z "$v" ]] || \
+               whiptail --msgbox "Must be a number of seconds." 8 60 ;;
+        7) v="$(ask_string "Boot-test RAM" "VM RAM in MB for the boot test:" "$V_QEMU_MEM")"
+           [[ "$v" =~ ^[0-9]+$ ]] && V_QEMU_MEM="$v" || [[ -z "$v" ]] || \
+               whiptail --msgbox "Must be a number of MB." 8 60 ;;
+        8) pkg_menu ;;
+        9) break ;;
+    esac
+done
+
+{
+    echo "# SDK configuration written by scripts/menuconfig. See Config.in."
+    echo "CONFIG_SDK_DISTRO=\"trixie\""
+    echo "CONFIG_SDK_FLAVOUR=\"amd64\""
+    echo "CONFIG_SDK_INITSYSTEM=\"systemd\""
+    echo "CONFIG_SDK_BOOTLOADER=\"$V_BOOTLOADER\""
+    echo "CONFIG_SDK_MEMTEST=\"$V_MEMTEST\""
+    echo "CONFIG_SDK_ISO_NAME=\"$V_ISO_NAME\""
+    echo "CONFIG_SDK_ISO_VOLUME=\"$V_ISO_VOLUME\""
+    echo "CONFIG_SDK_ISO_APPLICATION=\"$V_ISO_APP\""
+    echo "CONFIG_SDK_BOOT_TIMEOUT=\"$V_BOOT_TIMEOUT\""
+    echo "CONFIG_SDK_QEMU_MEM=\"$V_QEMU_MEM\""
+    echo "# CONFIG_SDK_SECURITY is not set"
+    echo "# CONFIG_SDK_VOLATILE is not set"
+} > .config
+ok ".config written"

@@ -1,0 +1,14 @@
+# Default SDK configuration (OpenWrt-style). Copy to .config via
+# `make defconfig`. See Config.in for symbol documentation.
+CONFIG_SDK_DISTRO="trixie"
+CONFIG_SDK_FLAVOUR="amd64"
+CONFIG_SDK_INITSYSTEM="systemd"
+CONFIG_SDK_BOOTLOADER="syslinux"
+CONFIG_SDK_MEMTEST="none"
+CONFIG_SDK_ISO_NAME="debian-trixie-cli-amd64.hybrid.iso"
+CONFIG_SDK_ISO_VOLUME="Debian-Live-Trixie-CLI"
+CONFIG_SDK_ISO_APPLICATION="Debian Trixie Live (CLI, no GUI)"
+CONFIG_SDK_BOOT_TIMEOUT="420"
+CONFIG_SDK_QEMU_MEM="2048"
+# CONFIG_SDK_SECURITY is not set
+# CONFIG_SDK_VOLATILE is not set

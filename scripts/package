@@ -1,0 +1,551 @@
+#!/bin/bash
+# Package selection manager for the debian-live SDK (OpenWrt-style).
+#
+# Usage: ./scripts/package <cmd> [args] [--help]
+#
+#   updatedb                  fetch trixie indexes, (re)build package/db.json
+#   list [--section S] [--search T]
+#                             show selected packages (or browse the archive)
+#   show <pkg>                metadata, dependencies, reverse dependencies
+#   add <pkg>... [--yes]      select packages (deps auto-added, with plan)
+#   del <pkg>... [--yes|--force]
+#                             deselect packages (refuses to break dependents)
+#   check                     verify selection: unknown names, unsatisfied
+#                             deps, conflicts (exit 1 on errors)
+#   sync                      regenerate config/package-lists/70-sdk-selection
+#                             + OS artifacts (71-os-selection, bootstrap
+#                             excludes, purge hook) (runs during configure)
+#   init [--force]             seed .config.packages with the default set
+#   os-init [--force]          seed .config.os-packages from the last build's
+#                             installed set (chroot.packages.live)
+#   os-list [--category C] [--search T] [--tsv]
+#                             show OS-internal packages (base/live/kernel/...)
+#   os-add <pkg>... [--yes]   keep OS package(s) (revert a removal or add an
+#                             OS-level package, deps auto-checked)
+#   os-del <pkg>... [--yes|--force]
+#                             remove OS package(s) (bootstrap-exclude + purge
+#                             hook; refuses boot-critical/depended-on pkgs)
+#   os-check                  verify OS removals (boot guards + broken deps)
+#
+# Selection lives in .config.packages (CONFIG_PACKAGE_<name>=y). The few
+# locked core packages (kernel, init, iso tooling) live in
+# layers/base/package-lists/core.list.chroot and cannot be deselected.
+# OS-internal selection lives in .config.os-packages (CONFIG_OS_<name>=y to
+# keep, '# CONFIG_OS_<name> is not set' to remove). Absent names default to
+# kept. Removals are applied as debootstrap --exclude (base packages) plus a
+# chroot purge hook (everything else).
+#
+# Selection lives in .config.packages (CONFIG_PACKAGE_<name>=y). The few
+# locked core packages (kernel, init, iso tooling) live in
+# layers/base/package-lists/core.list.chroot and cannot be deselected.
+
+source "$(dirname "$0")/common.sh"
+[[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && usage
+
+cd "$PROJECT_DIR"
+
+SELFILE="$PROJECT_DIR/.config.packages"
+OSSELFILE="$PROJECT_DIR/.config.os-packages"
+PKGDB="python3 $SDK_DIR/lib/pkgdb.py"
+# Locked: without these the image cannot boot (or cannot be assembled).
+REQUIRED="linux-image-amd64 systemd-sysv syslinux-utils"
+# Boot-critical live plumbing: removing these breaks the live boot itself.
+OS_LOCKED="live-boot live-boot-initramfs-tools live-config-systemd"
+
+live_file() { # newest installed-set manifest, for seeding/listing OS pkgs
+    for f in chroot.packages.live chroot.packages.install binary.packages; do
+        [[ -f "$PROJECT_DIR/$f" ]] && { echo "$PROJECT_DIR/$f"; return 0; }
+    done
+    echo ""
+}
+
+cmd="${1:-}"; shift || true
+
+ensure_db() {
+    if [[ ! -f package/db.json ]]; then
+        log "package DB missing, building it (one-time download ~15MB)..."
+        $PKGDB db-update "$PROJECT_DIR" || die "DB update failed (network?)"
+    fi
+}
+
+core_file() {
+    if [[ -f config/package-lists/core.list.chroot ]]; then
+        echo "config/package-lists/core.list.chroot"
+    else
+        echo "layers/base/package-lists/core.list.chroot"
+    fi
+}
+
+sel_has() { grep -qxF "CONFIG_PACKAGE_$1=y" "$SELFILE" 2>/dev/null; }
+
+sel_set() { # name y|n  (atomic via tmp file)
+    local name="$1" val="$2" tmp="$SELFILE.tmp.$$" line done=0
+    : > "$tmp"
+    if [[ -f "$SELFILE" ]]; then
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            if [[ "$line" == "CONFIG_PACKAGE_$name=y" || "$line" == "# CONFIG_PACKAGE_$name is not set" ]]; then
+                done=1
+                [[ "$val" == "y" ]] && echo "CONFIG_PACKAGE_$name=y" >> "$tmp" \
+                                    || echo "# CONFIG_PACKAGE_$name is not set" >> "$tmp"
+            else
+                echo "$line" >> "$tmp"
+            fi
+        done < "$SELFILE"
+    fi
+    if [[ "$done" -eq 0 ]]; then
+        [[ "$val" == "y" ]] && echo "CONFIG_PACKAGE_$name=y" >> "$tmp" \
+                            || echo "# CONFIG_PACKAGE_$name is not set" >> "$tmp"
+    fi
+    mv -f "$tmp" "$SELFILE"
+}
+
+sel_list() { grep -E '^CONFIG_PACKAGE_.+=y$' "$SELFILE" 2>/dev/null | sed 's/^CONFIG_PACKAGE_//; s/=y$//' | sort -u; }
+
+os_has_kept() { grep -qxF "CONFIG_OS_$1=y" "$OSSELFILE" 2>/dev/null; }
+os_is_removed() { grep -qxE "# CONFIG_OS_$1 is not set" "$OSSELFILE" 2>/dev/null; }
+os_list_kept() { grep -E '^CONFIG_OS_.+=y$' "$OSSELFILE" 2>/dev/null | sed 's/^CONFIG_OS_//; s/=y$//' | sort -u; }
+os_list_removed() { grep -E '^# CONFIG_OS_.+ is not set' "$OSSELFILE" 2>/dev/null | sed 's/^# CONFIG_OS_//; s/ is not set$//' | sort -u; }
+
+os_unset() { # forget a package entirely (for OS pkgs never in the base image)
+    local name="$1" tmp="$OSSELFILE.tmp.$$"
+    grep -vxE "(CONFIG_OS_$name=y|# CONFIG_OS_$name is not set)" "$OSSELFILE" 2>/dev/null > "$tmp" || true
+    mv -f "$tmp" "$OSSELFILE"
+}
+
+os_set() { # name y|n  (atomic via tmp file, mirrors sel_set)
+    local name="$1" val="$2" tmp="$OSSELFILE.tmp.$$" line done=0
+    : > "$tmp"
+    if [[ -f "$OSSELFILE" ]]; then
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            if [[ "$line" == "CONFIG_OS_$name=y" || "$line" == "# CONFIG_OS_$name is not set" ]]; then
+                done=1
+                [[ "$val" == "y" ]] && echo "CONFIG_OS_$name=y" >> "$tmp" \
+                                    || echo "# CONFIG_OS_$name is not set" >> "$tmp"
+            else
+                echo "$line" >> "$tmp"
+            fi
+        done < "$OSSELFILE"
+    fi
+    if [[ "$done" -eq 0 ]]; then
+        [[ "$val" == "y" ]] && echo "CONFIG_OS_$name=y" >> "$tmp" \
+                            || echo "# CONFIG_OS_$name is not set" >> "$tmp"
+    fi
+    mv -f "$tmp" "$OSSELFILE"
+}
+
+is_required() { [[ " $REQUIRED " == *" $1 "* ]]; }
+is_os_locked() { [[ " $OS_LOCKED " == *" $1 "* ]]; }
+is_essential() { # via db.json priority lookup (needs ensure_db first)
+    python3 -c "
+import json,sys
+db=json.load(open('package/db.json'))['packages']
+i=db.get('$1')
+sys.exit(0 if (i and i.get('ess')) else 1)
+" 2>/dev/null
+}
+
+confirm() { # prompt ; returns 0 on yes. --yes flag or /dev/tty answer.
+    if [[ "${ASSUME_YES:-0}" == "1" ]]; then return 0; fi
+    if [[ ! -e /dev/tty ]]; then die "not confirmed (no tty; re-run with --yes)";
+    fi
+    local ans
+    printf '%s [y/N] ' "$1" > /dev/tty
+    read -r ans < /dev/tty || true
+    [[ "$ans" == "y" || "$ans" == "Y" ]]
+}
+
+cmd_updatedb() {
+    $PKGDB db-update "$PROJECT_DIR"
+}
+
+cmd_init() {
+    local force=0
+    [[ "${1:-}" == "--force" ]] && force=1
+    if [[ -f "$SELFILE" && "$force" -eq 0 ]]; then
+        die ".config.packages exists (use --force to reseed)"
+    fi
+    {
+        echo "# Managed by scripts/package and make menuconfig."
+        echo "# Reseed defaults with: scripts/package init --force"
+        for p in firmware-linux sudo systemd-resolved dbus openssh-server \
+                 openssh-client iproute2 net-tools ethtool curl wget rsync \
+                 ca-certificates less nano vim-tiny man-db procps psmisc \
+                 apt-utils dialog whiptail lsb-release; do
+            echo "CONFIG_PACKAGE_$p=y"
+        done
+    } > "$SELFILE"
+    ok "seeded .config.packages ($(sel_list | wc -l) packages)"
+}
+
+cmd_list() {
+    ensure_db
+    local section="" search="" sections=0 tsv=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --section) section="$2"; shift 2 ;;
+            --search) search="$2"; shift 2 ;;
+            --sections) sections=1; shift ;;
+            --tsv) tsv=1; shift ;;
+            *) die "unknown flag: $1" ;;
+        esac
+    done
+    if [[ "$sections" -eq 1 ]]; then
+        $PKGDB sections "$PROJECT_DIR"
+        return 0
+    fi
+    if [[ -n "$section" ]]; then
+        if [[ "$tsv" -eq 1 ]]; then
+            $PKGDB section-pkgs "$PROJECT_DIR" "$section" | grep -v '^#'
+        else
+            $PKGDB section-pkgs "$PROJECT_DIR" "$section" | while IFS=$'\t' read -r n v d; do
+                [[ "$n" == \#* ]] && { echo "$n $d"; continue; }
+                sel_has "$n" && st="[*]" || st="[ ]"
+                printf '%s %-28s %s\n' "$st" "$n" "$d"
+            done
+        fi
+    elif [[ -n "$search" ]]; then
+        if [[ "$tsv" -eq 1 ]]; then
+            $PKGDB search "$PROJECT_DIR" "$search"
+        else
+            $PKGDB search "$PROJECT_DIR" "$search" | while IFS=$'\t' read -r n v sec d; do
+                sel_has "$n" && st="[*]" || st="[ ]"
+                printf '%s %-28s %-12s %s\n' "$st" "$n" "($sec)" "$d"
+            done
+        fi
+    else
+        if [[ "$tsv" -eq 1 ]]; then
+            $PKGDB status "$PROJECT_DIR" --selected "$SELFILE"
+        else
+            printf '%-28s %-14s %s\n' "PACKAGE" "VERSION" "DESCRIPTION"
+            $PKGDB status "$PROJECT_DIR" --selected "$SELFILE" | while IFS=$'\t' read -r n v sec d; do
+                printf '%-28s %-14s %s\n' "$n" "$v" "$d"
+            done
+        fi
+    fi
+}
+
+cmd_show() {
+    ensure_db
+    [[ -n "${1:-}" ]] || die "usage: scripts/package show <pkg>"
+    $PKGDB show "$PROJECT_DIR" "$1"
+    if sel_has "$1"; then echo "Selected: yes"; else echo "Selected: no"; fi
+    if [[ -f "$OSSELFILE" ]]; then
+        if os_is_removed "$1"; then echo "OS-internal: removed"
+        elif os_has_kept "$1"; then echo "OS-internal: kept"
+        fi
+    fi
+}
+
+cmd_add() {
+    ensure_db
+    local pkgs=() yes=0 p
+    for p in "$@"; do [[ "$p" == "--yes" ]] && yes=1 || pkgs+=("$p"); done
+    [[ "${#pkgs[@]}" -gt 0 ]] || die "usage: scripts/package add <pkg>... [--yes]"
+    [[ "$yes" -eq 1 ]] && ASSUME_YES=1
+    for p in "${pkgs[@]}"; do
+        is_required "$p" && die "$p is locked (core system package, cannot be managed here)"
+    done
+    local plan
+    local pargs=(plan "$PROJECT_DIR" --selected "$SELFILE")
+    [[ -f "$OSSELFILE" ]] && pargs+=(--os-selected "$OSSELFILE")
+    plan="$($PKGDB "${pargs[@]}" "${pkgs[@]}")" || {
+        echo "$plan" | grep -E '^UNKNOWN:' >&2
+        die "unknown package name(s) - check spelling with: scripts/package list --search <term>"
+    }
+    local toadd
+    toadd="$(echo "$plan" | grep -E '^TOADD:' | awk '{print $2}')"
+    echo "$plan" | grep -E '^(NOTE|PLAN-EMPTY):' || true
+    local new=()
+    for p in "${pkgs[@]}" $toadd; do
+        sel_has "$p" || new+=("$p")
+    done
+    if [[ "${#new[@]}" -eq 0 ]]; then ok "already selected: ${pkgs[*]}"; return 0; fi
+    echo "Will select: ${new[*]}"
+    confirm "Apply?" || die "aborted"
+    for p in "${new[@]}"; do sel_set "$p" y; done
+    ok "selected: ${new[*]}"
+}
+
+cmd_del() {
+    local pkgs=() yes=0 force=0 p
+    for p in "$@"; do
+        case "$p" in
+            --yes) yes=1 ;; --force) force=1 ;; *) pkgs+=("$p") ;;
+        esac
+    done
+    [[ "${#pkgs[@]}" -gt 0 ]] || die "usage: scripts/package del <pkg>... [--yes|--force]"
+    [[ "$yes" -eq 1 || "$force" -eq 1 ]] && ASSUME_YES=1
+    ensure_db
+    for p in "${pkgs[@]}"; do
+        is_required "$p" && die "$p is locked (core system package in core.list.chroot)"
+        sel_has "$p" || die "$p is not selected"
+        if [[ "$force" -eq 0 ]]; then
+            local users
+            users="$($PKGDB rdeps "$PROJECT_DIR" "$p" --selected "$SELFILE" | grep -vxF "$p" || true)"
+            if [[ -n "$users" ]]; then
+                die "$p is needed by selected package(s): $(echo $users) (use --force to override)"
+            fi
+        fi
+    done
+    echo "Will deselect: ${pkgs[*]}"
+    [[ "$force" -eq 1 ]] && warn "--force: skipping dependent checks"
+    confirm "Apply?" || die "aborted"
+    for p in "${pkgs[@]}"; do sel_set "$p" n; done
+    ok "deselected: ${pkgs[*]}"
+    log "hint: run scripts/package check to verify the remaining set"
+}
+
+cmd_check() {
+    ensure_db
+    local args=(check "$PROJECT_DIR" --selected "$SELFILE" --core "$(core_file)"
+        --required "$(echo $REQUIRED | tr ' ' ',')")
+    [[ -f "$OSSELFILE" ]] && args+=(--os-selected "$OSSELFILE")
+    $PKGDB "${args[@]}"
+    if [[ -f "$OSSELFILE" ]]; then
+        local live; live="$(live_file)"
+        local oargs=(os-check "$PROJECT_DIR" --os-selected "$OSSELFILE"
+            --selected "$SELFILE" --core "$(core_file)"
+            --required "$(echo $REQUIRED | tr ' ' ',')")
+        [[ -n "$live" ]] && oargs+=(--live "$live")
+        $PKGDB "${oargs[@]}"
+    fi
+}
+
+cmd_os_init() {
+    local force=0
+    [[ "${1:-}" == "--force" ]] && force=1
+    if [[ -f "$OSSELFILE" && "$force" -eq 0 ]]; then
+        die ".config.os-packages exists (use --force to reseed)"
+    fi
+    ensure_db
+    local live; live="$(live_file)"
+    local internal
+    if [[ -n "$live" ]]; then
+        internal="$($PKGDB internal "$PROJECT_DIR" --live "$live" --selected "$SELFILE" | cut -f1)"
+    else
+        internal="$($PKGDB internal "$PROJECT_DIR" --selected "$SELFILE" | cut -f1)"
+        warn "no build manifest (chroot.packages.live) - seeding from archive base set"
+    fi
+    {
+        echo "# Managed by scripts/package os-* and make menuconfig (OS internal menu)."
+        echo "# Reseed defaults with: scripts/package os-init --force"
+        echo "#   CONFIG_OS_<name>=y      keep this OS/internal package (default)"
+        echo "#   # CONFIG_OS_<name> is not set  remove it (bootstrap-exclude + purge hook)"
+        echo "$internal" | while read -r p; do
+            [[ -z "$p" || "$p" == \#* ]] && continue
+            sel_has "$p" && continue  # user-managed, skip here
+            echo "CONFIG_OS_$p=y"
+        done
+    } > "$OSSELFILE"
+    ok "seeded .config.os-packages ($(os_list_kept | wc -l) kept, source: ${live:-archive-base})"
+}
+
+cmd_os_list() {
+    ensure_db
+    local category="" search="" tsv=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --category) category="$2"; shift 2 ;;
+            --search) search="$2"; shift 2 ;;
+            --tsv) tsv=1; shift ;;
+            *) die "unknown flag: $1" ;;
+        esac
+    done
+    local live; live="$(live_file)"
+    local args=(internal "$PROJECT_DIR")
+    [[ -n "$live" ]] && args+=(--live "$live")
+    args+=(--selected "$SELFILE")
+    [[ -f "$OSSELFILE" ]] && args+=(--os-selected "$OSSELFILE")
+    [[ -n "$category" ]] && args+=(--category "$category")
+    if [[ "$tsv" -eq 1 ]]; then
+        $PKGDB "${args[@]}" | { [[ -n "$search" ]] && grep -i "$search" || cat; }
+    else
+        printf '%-28s %-12s %-9s %-7s %s\n' "PACKAGE" "CATEGORY" "PRIORITY" "STATE" "DESCRIPTION"
+        $PKGDB "${args[@]}" | { [[ -n "$search" ]] && grep -i "$search" || cat; } \
+            | while IFS=$'\t' read -r n v sec pri ess cat state d; do
+            printf '%-28s %-12s %-9s %-7s %s\n' "$n" "$cat" "$pri" "$state" "$d"
+        done
+    fi
+}
+
+cmd_os_add() {
+    ensure_db
+    local pkgs=() yes=0 p
+    for p in "$@"; do [[ "$p" == "--yes" ]] && yes=1 || pkgs+=("$p"); done
+    [[ "${#pkgs[@]}" -gt 0 ]] || die "usage: scripts/package os-add <pkg>... [--yes]"
+    [[ "$yes" -eq 1 ]] && ASSUME_YES=1
+    [[ -f "$OSSELFILE" ]] || cmd_os_init
+    local plan
+    plan="$($PKGDB plan "$PROJECT_DIR" --selected "$SELFILE" --os-selected "$OSSELFILE" "${pkgs[@]}")" || {
+        echo "$plan" | grep -E '^UNKNOWN:' >&2
+        die "unknown package name(s) - check spelling with: scripts/package os-list --search <term>"
+    }
+    echo "$plan" | grep -E '^(NOTE|PLAN-EMPTY):' || true
+    local new=()
+    for p in "${pkgs[@]}"; do
+        os_is_removed "$p" && new+=("$p")
+        os_has_kept "$p" || { os_is_removed "$p" || new+=("$p"); }
+    done
+    # dedupe
+    new=($(printf '%s\n' "${new[@]}" | sort -u))
+    if [[ "${#new[@]}" -eq 0 ]]; then ok "already kept: ${pkgs[*]}"; return 0; fi
+    echo "Will keep OS package(s): ${new[*]}"
+    confirm "Apply?" || die "aborted"
+    for p in "${new[@]}"; do os_set "$p" y; done
+    ok "kept: ${new[*]}"
+}
+
+cmd_os_del() {
+    local pkgs=() yes=0 force=0 p
+    for p in "$@"; do
+        case "$p" in
+            --yes) yes=1 ;; --force) force=1 ;; *) pkgs+=("$p") ;;
+        esac
+    done
+    [[ "${#pkgs[@]}" -gt 0 ]] || die "usage: scripts/package os-del <pkg>... [--yes|--force]"
+    [[ "$yes" -eq 1 || "$force" -eq 1 ]] && ASSUME_YES=1
+    ensure_db
+    [[ -f "$OSSELFILE" ]] || cmd_os_init
+    for p in "${pkgs[@]}"; do
+        is_required "$p" && die "$p is locked (core system package in core.list.chroot)"
+        is_os_locked "$p" && die "$p is boot-critical live plumbing (removing it breaks live boot)"
+        sel_has "$p" && die "$p is user-managed in .config.packages (use: scripts/package del $p)"
+        if is_essential "$p" && [[ "$force" -eq 0 ]]; then
+            die "$p is Essential (removing it breaks dpkg/apt; re-run with --force if you really mean it)"
+        fi
+        if [[ "$force" -eq 0 ]]; then
+            local live; live="$(live_file)"
+            local oargs=(os-check "$PROJECT_DIR" --os-selected "$OSSELFILE"
+                --selected "$SELFILE" --core "$(core_file)"
+                --required "$(echo $REQUIRED | tr ' ' ',')")
+            [[ -n "$live" ]] && oargs+=(--live "$live")
+            # dry-run: simulate removal via a temp os-file copy
+            # (with the kept line REPLACED, mirroring os_set n semantics)
+            local tmp; tmp="$(mktemp)"
+            grep -vxE "(CONFIG_OS_$p=y|# CONFIG_OS_$p is not set)" "$OSSELFILE" > "$tmp"
+            printf '# CONFIG_OS_%s is not set\n' "$p" >> "$tmp"
+            # replace --os-selected value with tmp
+            local dryargs=()
+            for a in "${oargs[@]}"; do
+                [[ "$a" == "$OSSELFILE" ]] && dryargs+=("$tmp") || dryargs+=("$a")
+            done
+            if ! $PKGDB "${dryargs[@]}" >/tmp/osdry.log 2>&1; then
+                grep -E '^ERROR:' /tmp/osdry.log >&2 || true
+                rm -f "$tmp" /tmp/osdry.log
+                die "$p cannot be removed (breaks dependencies above; use --force to override)"
+            fi
+            rm -f "$tmp" /tmp/osdry.log
+        fi
+    done
+    echo "Will remove OS package(s): ${pkgs[*]}"
+    [[ "$force" -eq 1 ]] && warn "--force: skipping Essential/dependency guards (boot-critical still locked)"
+    confirm "Apply?" || die "aborted"
+    local live_names=""
+    live_names="$(live_file)"
+    for p in "${pkgs[@]}"; do
+        if [[ -n "$live_names" ]] && ! grep -qxF "$p" <(cut -f1 "$live_names" | sed 's/:.*//') 2>/dev/null \
+           && ! os_is_removed "$p"; then
+            # Never part of the base image: forget it instead of excluding.
+            os_unset "$p"
+        else
+            os_set "$p" n
+        fi
+    done
+    ok "removed: ${pkgs[*]} (applies at next build via bootstrap-exclude + purge hook)"
+    log "hint: run scripts/package os-check to verify the remaining set"
+}
+
+cmd_os_check() {
+    ensure_db
+    [[ -f "$OSSELFILE" ]] || die ".config.os-packages missing (run: scripts/package os-init)"
+    local live; live="$(live_file)"
+    local args=(os-check "$PROJECT_DIR" --os-selected "$OSSELFILE"
+        --selected "$SELFILE" --core "$(core_file)"
+        --required "$(echo $REQUIRED | tr ' ' ',')")
+    [[ -n "$live" ]] && args+=(--live "$live")
+    $PKGDB "${args[@]}"
+}
+
+cmd_sync() {
+    local out="config/package-lists/70-sdk-selection.list.chroot"
+    local out_os="config/package-lists/71-os-selection.list.chroot"
+    local hook="config/hooks/0910-os-purge.chroot"
+    local core; core="$(core_file)"
+    {
+        echo "# Generated by scripts/package sync from .config.packages - DO NOT EDIT."
+        echo "# Edit selection via: scripts/package add/del, or make menuconfig."
+        sel_list | while read -r p; do
+            grep -qxF "$p" "$core" 2>/dev/null || echo "$p"
+        done
+    } > /tmp/sdk-selection.$$
+    sudo cp /tmp/sdk-selection.$$ "$out"
+    sudo chmod 644 "$out"
+    rm -f /tmp/sdk-selection.$$
+    ok "wrote $out ($(grep -cE '^[a-z0-9]' "$out") packages)"
+    # --- OS artifacts (no-ops when .config.os-packages is absent) ---
+    [[ -f "$OSSELFILE" ]] || { log "no .config.os-packages - skipping OS sync"; return 0; }
+    local live; live="$(live_file)"
+    local live_names=""
+    if [[ -n "$live" ]]; then
+        live_names="$(cut -f1 "$live" | sed 's/:.*//' | sort -u)"
+    fi
+    { # 71-os-selection: genuinely NEW os-kept pkgs (not user/core/live-default)
+        echo "# Generated by scripts/package sync from .config.os-packages - DO NOT EDIT."
+        echo "# OS-level additions beyond the default installed set."
+        os_list_kept | while read -r p; do
+            [[ -z "$p" ]] && continue
+            sel_has "$p" && continue
+            grep -qxF "$p" "$core" 2>/dev/null && continue
+            if [[ -n "$live_names" ]] && grep -qxF "$p" <<< "$live_names"; then continue; fi
+            echo "$p"
+        done
+    } > /tmp/os-selection.$$
+    sudo cp /tmp/os-selection.$$ "$out_os"
+    sudo chmod 644 "$out_os"
+    rm -f /tmp/os-selection.$$
+    ok "wrote $out_os ($(grep -cE '^[a-z0-9]' "$out_os" || true) packages)"
+    local removed; removed="$(os_list_removed)"
+    # Bootstrap excludes need no file patching: config_trixie.sh exports
+    # LB_BOOTSTRAP_EXCLUDE from this same file when `lb config` runs
+    # (see configure.sh, which regenerates config/ before this sync step).
+    if [[ -n "$removed" ]]; then
+        log "bootstrap-exclude (via config_trixie.sh): $(echo $removed)"
+    else
+        log "bootstrap-exclude: (empty)"
+    fi
+    { # purge hook: removes non-bootstrap OS pkgs at end of chroot stage
+        echo "#!/bin/sh"
+        echo "# Generated by scripts/package sync from .config.os-packages - DO NOT EDIT."
+        echo "set -e"
+        if [[ -z "$removed" ]]; then
+            echo "echo 'os-purge: nothing to remove'"
+        else
+            echo "$removed" | while read -r p; do
+                [[ -z "$p" ]] && continue
+                echo "apt-get purge -y $p || true"
+            done
+            echo "apt-get --purge -y autoremove || true"
+        fi
+    } > /tmp/os-purge.$$
+    sudo cp /tmp/os-purge.$$ "$hook"
+    sudo chmod 755 "$hook"
+    rm -f /tmp/os-purge.$$
+    ok "wrote $hook ($(echo "$removed" | grep -c . || true) removals)"
+}
+
+case "$cmd" in
+    updatedb) cmd_updatedb ;;
+    list) cmd_list "$@" ;;
+    show) cmd_show "$@" ;;
+    add) cmd_add "$@" ;;
+    del) cmd_del "$@" ;;
+    check) cmd_check ;;
+    sync) cmd_sync ;;
+    init) cmd_init "$@" ;;
+    os-init) cmd_os_init "$@" ;;
+    os-list) cmd_os_list "$@" ;;
+    os-add) cmd_os_add "$@" ;;
+    os-del) cmd_os_del "$@" ;;
+    os-check) cmd_os_check ;;
+    *) die "usage: scripts/package <updatedb|list|show|add|del|check|sync|init|os-init|os-list|os-add|os-del|os-check> [--help]" ;;
+esac

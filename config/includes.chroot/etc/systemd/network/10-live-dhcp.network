@@ -1,0 +1,12 @@
+# Enable DHCP on wired interfaces for the live session
+[Match]
+Name=en* eth*
+
+[Network]
+DHCP=yes
+
+[DHCPv4]
+UseDNS=yes
+
+[DHCPv6]
+UseDNS=yes

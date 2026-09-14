@@ -1,0 +1,3 @@
+#!/bin/sh
+# Point /etc/resolv.conf at systemd-resolved during live sessions
+ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf

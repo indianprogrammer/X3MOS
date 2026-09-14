@@ -1,0 +1,121 @@
+#!/bin/bash
+# Feed manager for the debian-live SDK (OpenWrt-style).
+#
+# Usage: ./scripts/feeds <update|install|list|clean> [-a|<name>] [--help]
+#
+#   update  [-a|name]  refresh feed sources (git pull clones, check links)
+#   install [-a|name]  merge feed content into package/feeds/<name>/ AND
+#                      overlay it onto config/ (tracked in .feeds.manifest)
+#   list               show feeds from feeds.conf with status
+#   clean              remove checked-out git feeds (feeds/<name>)
+#
+# Feed content (fragments) per feed:
+#   package-lists/, hooks/, includes.chroot/, includes.binary/, bootloaders/
+
+source "$(dirname "$0")/common.sh"
+[[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && usage
+
+cd "$PROJECT_DIR"
+
+FEEDS_FILE="feeds.conf"
+[[ -f "$FEEDS_FILE" ]] || FEEDS_FILE="feeds.conf.default"
+MANIFEST="$PROJECT_DIR/.feeds.manifest"
+
+# Print "type name location" lines for enabled feeds, in order.
+parse_feeds() {
+    grep -vE '^\s*(#|$)' "$FEEDS_FILE" | awk '$1 ~ /^src-(link|git)$/ {print $1, $2, $3}'
+}
+
+feed_dir() { echo "$PROJECT_DIR/feeds/$1"; }   # checked-out source
+stage_dir() { echo "$PROJECT_DIR/package/feeds/$1"; }  # merged staging copy
+
+cmd_update() { # [name]
+    local only="${1:-}"
+    while read -r type name loc; do
+        [[ -n "$only" && "$only" != "-a" && "$only" != "$name" ]] && continue
+        case "$type" in
+            src-link)
+                [[ -d "$PROJECT_DIR/$loc" ]] \
+                    && ok "feed $name: link $loc present" \
+                    || die "feed $name: missing directory $loc"
+                ;;
+            src-git)
+                url="${loc%%;*}"; branch="${loc##*;}"
+                [[ "$branch" == "$url" ]] && branch=""
+                if [[ ! -d "$(feed_dir "$name")/.git" ]]; then
+                    log "cloning feed $name ($url)..."
+                    git clone ${branch:+--branch "$branch"} "$url" "$(feed_dir "$name")" \
+                        || die "clone of feed $name failed"
+                else
+                    log "updating feed $name..."
+                    git -C "$(feed_dir "$name")" pull --ff-only \
+                        || warn "update of feed $name failed (kept old copy)"
+                fi
+                ok "feed $name: updated"
+                ;;
+        esac
+    done < <(parse_feeds)
+}
+
+cmd_install() { # [name]
+    local only="${1:-}"
+    while read -r type name loc; do
+        [[ -n "$only" && "$only" != "-a" && "$only" != "$name" ]] && continue
+        local src
+        case "$type" in
+            src-link) src="$PROJECT_DIR/$loc" ;;
+            src-git)  src="$(feed_dir "$name")"
+                      [[ -d "$src" ]] || die "feed $name not checked out (run scripts/feeds update $name first)"
+                      ;;
+        esac
+        [[ -d "$src" ]] || die "feed $name source missing: $src"
+        local dest; dest="$(stage_dir "$name")"
+        rm -rf "$dest"
+        mkdir -p "$dest"
+        for frag in package-lists hooks includes.chroot includes.binary bootloaders; do
+            [[ -e "$src/$frag" ]] || continue
+            mkdir -p "$dest"
+            cp -r "$src/$frag" "$dest/"
+        done
+        # Overlay onto config/ (needs root: config tree is root-owned).
+        for frag in package-lists hooks includes.chroot includes.binary bootloaders; do
+            [[ -e "$dest/$frag" ]] || continue
+            sudo mkdir -p "config/$frag"
+            sudo cp -r "$dest/$frag/." "config/$frag/"
+        done
+        grep -qxF "$name" "$MANIFEST" 2>/dev/null || echo "$name" >> "$MANIFEST"
+        ok "feed $name: installed"
+    done < <(parse_feeds)
+    sudo chown -R root:root config/package-lists config/hooks \
+        config/includes.chroot config/includes.binary config/bootloaders 2>/dev/null || true
+}
+
+cmd_list() {
+    printf "%-10s %-10s %s\n" "FEED" "TYPE" "STATUS"
+    while read -r type name loc; do
+        local st="missing"
+        if [[ "$type" == "src-link" && -d "$PROJECT_DIR/$loc" ]]; then st="ok(link)";
+        elif [[ "$type" == "src-git" && -d "$(feed_dir "$name")" ]]; then st="ok(git)"; fi
+        if [[ -d "$(stage_dir "$name")" ]]; then st="$st,installed"; fi
+        printf "%-10s %-10s %s\n" "$name" "${type#src-}" "$st"
+    done < <(parse_feeds)
+}
+
+cmd_clean() {
+    while read -r type name loc; do
+        if [[ "$type" == "src-git" ]]; then
+            rm -rf "$(feed_dir "$name")"
+            log "feed $name: checkout removed"
+        fi
+    done < <(parse_feeds)
+    ok "feeds cleaned (installed fragments stay until next install overwrites manifest)"
+}
+
+cmd="${1:-}"; target="${2:-}"
+case "$cmd" in
+    update)  cmd_update "$target" ;;
+    install) cmd_install "$target" ;;
+    list)    cmd_list ;;
+    clean)   cmd_clean ;;
+    *) die "usage: scripts/feeds <update|install|list|clean> [-a|<name>]" ;;
+esac

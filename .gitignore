@@ -1,0 +1,17 @@
+# live-build outputs (regenerable via `make world`)
+chroot/
+binary/
+cache/
+.build/
+bin/
+source/
+tftpboot/
+package/feeds/
+feeds/
+# downloaded archive indexes (regenerable via `scripts/package updatedb`)
+dl/
+# build logs and release artifacts
+build.log*
+*.iso
+*.sha256
+*.zsync*

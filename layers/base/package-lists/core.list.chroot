@@ -1,0 +1,8 @@
+# Locked core packages - REQUIRED to boot and assemble the image.
+# Managed by the SDK (REQUIRED set in scripts/package). Do NOT remove:
+#   linux-image-amd64  the kernel (no kernel = no boot)
+#   systemd-sysv       /sbin/init (PID 1)
+#   syslinux-utils     provides isohybrid for the iso-hybrid assembly step
+linux-image-amd64
+systemd-sysv
+syslinux-utils

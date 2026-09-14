@@ -1,0 +1,39 @@
+# Debian Trixie live CLI system - no GUI
+
+# Kernel and firmware
+linux-image-amd64
+firmware-linux
+
+# Init and core
+systemd-sysv
+dbus
+sudo
+
+# Networking
+iproute2
+net-tools
+ethtool
+openssh-client
+openssh-server
+curl
+wget
+rsync
+ca-certificates
+
+# CLI tools
+less
+nano
+vim-tiny
+man-db
+procps
+psmisc
+apt-utils
+dialog
+whiptail
+lsb-release
+
+# DNS resolver (separate package since systemd 256)
+systemd-resolved
+
+# for the iso-hybrid step (isohybrid lives here, not in syslinux)
+syslinux-utils

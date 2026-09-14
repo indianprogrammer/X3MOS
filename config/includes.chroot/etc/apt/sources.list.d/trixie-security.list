@@ -1,0 +1,4 @@
+# Debian trixie security updates (live-build generates the old-style
+# trixie/updates line which no longer exists, so we ship the correct one)
+deb http://deb.debian.org/debian-security/ trixie-security main contrib non-free non-free-firmware
+deb-src http://deb.debian.org/debian-security/ trixie-security main contrib non-free non-free-firmware

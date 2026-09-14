@@ -1,0 +1,50 @@
+# SDK configuration symbols (informational; edited via `make menuconfig`,
+# stored in .config). Defaults live in .config.default.
+#
+# CONFIG_SDK_DISTRO          distribution codename (only "trixie" is supported:
+#                            mirrors, the security include and the isolinux
+#                            binaries are all trixie-specific)
+# CONFIG_SDK_FLAVOUR         kernel flavour suffix, i.e. linux-image-<flavour>
+#                            ("amd64" -> linux-image-amd64)
+# CONFIG_SDK_INITSYSTEM      init system for the live system ("systemd")
+# CONFIG_SDK_BOOTLOADER      ISO bootloader: "syslinux" (BIOS, USB+CD hybrid,
+#                            recommended) or "grub2" (El Torito CD boot only -
+#                            this live-build vintage cannot hybridize grub2)
+# CONFIG_SDK_MEMTEST         memtest boot entry: "none" or "memtest86+"
+# CONFIG_SDK_ISO_NAME        output filename (also SDK_ISO_NAME env override)
+# CONFIG_SDK_ISO_VOLUME      ISO volume id, max 32 chars
+# CONFIG_SDK_ISO_APPLICATION ISO application id string
+# CONFIG_SDK_BOOT_TIMEOUT    seconds to wait in `make boot-test` (also
+#                            SDK_BOOT_TIMEOUT env override)
+# CONFIG_SDK_QEMU_MEM        VM RAM in MB for `make boot-test` (also
+#                            SDK_QEMU_MEM env override)
+# CONFIG_SDK_SECURITY        build chroot against security repo (NOT WORKING:
+#                            this live-build writes the obsolete trixie/updates
+#                            suite; security updates are shipped in the image
+#                            via layers/base instead - keep unset)
+# CONFIG_SDK_VOLATILE        build chroot against -updates pocket (NOT WORKING:
+#                            defaults point at Ubuntu; keep unset)
+#
+# Package selection lives in .config.packages (NOT shell-sourced):
+#   CONFIG_PACKAGE_<debian-name>=y      package will be installed
+#   # CONFIG_PACKAGE_<name> is not set  explicitly deselected
+# Managed via: make menuconfig (Package selection menu),
+#   scripts/package list|show|add|del|check|sync|init|updatedb,
+#   make package-add P=<name> (deps auto-added), make package-check.
+# Locked core packages (kernel, init, iso tooling) live in
+# layers/base/package-lists/core.list.chroot and cannot be deselected.
+# Dependency data comes from package/db.json (scripts/package updatedb).
+#
+# OS-internal selection lives in .config.os-packages (NOT shell-sourced):
+#   CONFIG_OS_<debian-name>=y      keep this base/live/kernel package (default)
+#   # CONFIG_OS_<name> is not set  remove it at build time
+# Managed via: make menuconfig (Package selection > OS internal packages),
+#   scripts/package os-list|os-add|os-del|os-check|os-init,
+#   make os-add P=<name>, make os-del P=<name>, make os-check.
+# Removals are applied as debootstrap --exclude (LB_BOOTSTRAP_EXCLUDE,
+# exported from .config.os-packages by config_trixie.sh) plus a chroot purge
+# hook (config/hooks/0910-os-purge.chroot, written by `scripts/package sync`).
+# Genuine OS-level additions land in
+# config/package-lists/71-os-selection.list.chroot.
+# Guards: live-boot, live-boot-initramfs-tools and live-config-systemd are
+# boot-critical and locked; Essential=yes packages need --force.
