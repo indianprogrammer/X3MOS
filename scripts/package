@@ -253,7 +253,7 @@ cmd_add() {
         die "unknown package name(s) - check spelling with: scripts/package list --search <term>"
     }
     local toadd
-    toadd="$(echo "$plan" | grep -E '^TOADD:' | awk '{print $2}')"
+    toadd="$(echo "$plan" | grep -E '^TOADD:' | awk '{print $2}' || true)"
     echo "$plan" | grep -E '^(NOTE|PLAN-EMPTY):' || true
     local new=()
     for p in "${pkgs[@]}" $toadd; do
@@ -504,7 +504,7 @@ cmd_sync() {
     sudo chmod 644 "$out_os"
     rm -f /tmp/os-selection.$$
     ok "wrote $out_os ($(grep -cE '^[a-z0-9]' "$out_os" || true) packages)"
-    local removed; removed="$(os_list_removed)"
+    local removed; removed="$(os_list_removed || true)"
     # Bootstrap excludes need no file patching: config_trixie.sh exports
     # LB_BOOTSTRAP_EXCLUDE from this same file when `lb config` runs
     # (see configure.sh, which regenerates config/ before this sync step).

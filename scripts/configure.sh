@@ -61,9 +61,8 @@ if [[ -f .config.os-packages ]]; then
              config/hooks/0910-os-purge.chroot; do
         [[ -f "$f" ]] || die "missing $f (package sync OS step broken?)"
     done
-    expected_excl="$(grep -E '^# CONFIG_OS_.+ is not set' .config.os-packages \
-        | sed 's/^# CONFIG_OS_//; s/ is not set$//' | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//')"
-    actual_excl="$(grep -E '^LB_BOOTSTRAP_EXCLUDE=' config/bootstrap | cut -d= -f2 | tr -d '"')"
+    expected_excl="$(grep -E '^# CONFIG_OS_.+ is not set' .config.os-packages 2>/dev/null | sed 's/^# CONFIG_OS_//; s/ is not set$//' | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//' || true)"
+    actual_excl="$(grep -E '^LB_BOOTSTRAP_EXCLUDE=' config/bootstrap 2>/dev/null | cut -d= -f2 | tr -d '"' || true)"
     # normalize (order-insensitive) before comparing
     norm() { tr ' ' '\n' <<< "$1" | grep -v '^$' | sort -u | tr '\n' ' ' | sed 's/ $//'; }
     [[ "$(norm "$expected_excl")" == "$(norm "$actual_excl")" ]] \
