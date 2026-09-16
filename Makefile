@@ -33,7 +33,7 @@ include $(CURDIR)/include/sdk.mk
 	feeds-update feeds-install feeds-list feeds-clean \
 	package-list package-add package-del package-check package-db \
 	os-list os-add os-del os-check \
-	clean dirclean configure world image verify boot-test
+	clean dirclean configure world image installer verify boot-test
 
 help:
 	@echo "debian-live SDK targets:"
@@ -51,6 +51,7 @@ help:
 	@echo "  configure     generate config tree + install feeds"
 	@echo "  world         full pipeline to a boot-tested ISO in bin/"
 	@echo "  image         build the ISO only (expects configured tree)"
+	@echo "  installer     build a direct Debian Installer netinst ISO (offline)"
 	@echo "  package-list  show selected packages"
 	@echo "  package-add   select package(s): make package-add P=\"htop vim\""
 	@echo "  package-del   deselect package(s): make package-del P=htop"
@@ -121,6 +122,12 @@ image:
 
 verify:
 	$(SCRIPTSDIR)/verify.sh $(TOPDIR)/$(ISO_NAME)
+
+# Build a direct Debian Installer ISO (netinst-style, NOT a live ISO).
+# Boots straight into the Debian Installer and installs trixie to disk
+# completely offline using the on-disc pool. See scripts/build-installer.sh.
+installer:
+	$(SCRIPTSDIR)/build-installer.sh
 
 boot-test:
 	$(SCRIPTSDIR)/boot-test.sh $(TOPDIR)/$(ISO_NAME)
