@@ -103,7 +103,7 @@ clean:
 	sudo rm -rf cache
 
 dirclean: clean
-	sudo rm -rf cache chroot binary .build bin package feeds .feeds.manifest \
+	sudo rm -rf cache binary .build bin package feeds .feeds.manifest \
 		build.log build.log.prev source tftpboot
 	@echo "dirclean done (kept: .config, layers/, dl/, config/, scripts/, *.iso)"
 

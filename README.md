@@ -39,6 +39,10 @@ It is tested in VirtualBox (VGA and serial console).
 - **All interfaces up with DHCP on boot**: `systemd-networkd` (built-in DHCP
   client, no extra package) brings every interface up via DHCP, and
   `systemd-resolved` provides DNS (stub `resolv.conf`).
+- **Target overlay (`chroot/`)**: any file placed under `chroot/` is copied
+  verbatim onto the installed system at install time, e.g.
+  `chroot/etc/apt/sources.list` → `/etc/apt/sources.list`. This is the
+  installer-pipeline equivalent of live-build's `includes.chroot`.
 - **VirtualBox-safe apt-cdrom setup**: the installer's `apt-cdrom-setup`
   `40cdrom` generator is patched so it never block-probes the VM's CD
   controller (that freeze was the classic "Scanning the mirror" hang).
@@ -142,6 +146,7 @@ sudo ./scripts/check.sh           # configuration sanity
 | Locale / keymap        | `debian-installer/country`, `keyboard-configuration/*` |
 | Host/domain/network    | `netcfg/*` (network disabled: `netcfg/enable false`)    |
 | Mirror                 | `mirror/protocol select cdrom`, `apt-setup/*` disabled  |
+| Installed files        | `chroot/` overlay (copied onto `/target` by `late_command`) |
 | Partitioning           | `partman-auto/*` (`atomic` recipe on first disk)        |
 | Accounts               | `passwd/*`, forced again by `late_command` `chpasswd`   |
 | `sudo`                 | `pkgsel/include string sudo`, user in `sudo` group      |
@@ -162,11 +167,33 @@ drives the unattended path. Every question is either preseeded or marked
 - **Network**: `systemd-networkd` + `systemd-resolved` enabled; a
   `Name=*` `.network` unit brings **all** interfaces up with DHCP on boot
   (`/etc/resolv.conf` → systemd stub).
-- **apt**: offline stub sources (`# OFFLINE …` in `/etc/apt/sources.list`);
-  no mirror, no network usage.
+- **apt**: offline stub sources by default (`# OFFLINE …` in
+  `/etc/apt/sources.list`); override with `chroot/etc/apt/sources.list`
+  (the overlay is applied last and therefore wins).
 - **First boot**: `press-to-reboot.service` (ordered just before
   `getty.target`) shows the credentials banner on the active console, waits
   for ENTER on VGA and serial, then reboots once into a clean login.
+
+---
+
+## Customizing the installed system (`chroot/` overlay)
+
+Anything under the repository's `chroot/` directory is copied verbatim onto
+the installed root filesystem during installation, after the base install and
+after the offline apt defaults — so it also overrides them:
+
+```
+chroot/etc/apt/sources.list        ->  /etc/apt/sources.list
+chroot/etc/motd                    ->  /etc/motd
+chroot/etc/systemd/system/foo.service -> /etc/systemd/system/foo.service
+```
+
+- Paths are relative to the target root; ownership/permissions are preserved
+  (`cp -a`).
+- The tree is embedded into the installer initrd as `/overlay` at build time,
+  then `late_command` runs `cp -a /overlay/. /target/`.
+- Keep it small — it lives inside the initrd/ISO.
+- Rebuild the ISO after changing it: `sudo ./scripts/build-installer.sh`.
 
 ---
 
@@ -183,6 +210,8 @@ scripts/
   boot-test.sh               helper to boot-test the ISO
   patch-virtualbox-cdrom.sh  the apt-cdrom 40cdrom fix
 preseed.cfg                  the d-i auto-install preseed (all answers)
+chroot/                      target overlay: files copied verbatim onto the
+                             installed system (`chroot/<path>` -> `/<path>`)
 patches/
   usr/share/press-to-reboot/ first-boot credentials banner + systemd unit
   usr/lib/apt-setup/generators/40cdrom  VirtualBox-safe apt-source writer

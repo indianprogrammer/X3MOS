@@ -126,6 +126,19 @@ cp "$PROJECT_DIR/patches/usr/share/press-to-reboot/press-to-reboot.service" \
 chmod 755 "$INITRD_TMP/usr/share/press-to-reboot/press-to-reboot"
 ok "press-to-reboot target files embedded in initrd"
 
+# Target overlay: everything under <repo>/chroot/ is applied verbatim on top
+# of the installed system (the installer equivalent of live-build's
+# includes.chroot). Embedded into the initrd as /overlay and copied onto
+# /target by the preseed late_command.
+if [[ -d "$PROJECT_DIR/chroot" ]] \
+    && [[ -n "$(find "$PROJECT_DIR/chroot" -mindepth 1 -maxdepth 1 2>/dev/null)" ]]; then
+    mkdir -p "$INITRD_TMP/overlay"
+    cp -a "$PROJECT_DIR"/chroot/. "$INITRD_TMP/overlay/"
+    ok "target overlay embedded in initrd ($(find "$INITRD_TMP/overlay" -type f | wc -l) files)"
+else
+    log "no target overlay (chroot/ is empty or missing) - skipping"
+fi
+
 # Sign the CD Release so apt-cdrom / apt in the target TRUSTS the medium.
 # Without a valid signature, apt on trixie refuses the cdrom source and
 # apt-setup dies at "50mirror ... sources.list.new: No such file" exactly as

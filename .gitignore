@@ -1,5 +1,4 @@
 # live-build outputs (regenerable via `make world`)
-chroot/
 binary/
 cache/
 .build/
