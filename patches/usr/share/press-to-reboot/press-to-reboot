@@ -21,9 +21,14 @@ BANNER='\n   =*=*   INSTALLATION COMPLETE   =*=\n   The system has been installe
 draw() {
     # StandardOutput=tty points stdout at /dev/console (the active VGA console).
     printf '\033[2J\033[H%b' "$BANNER"
+    if printf '%s\n' "$NET" | grep -q 'enp\|eth\|wlan\|ens\|eno\|wl'; then
+        printf '%b\n' "$NET"
+    else
+        printf '\n   network status:\n%b\n' "$NET"
+    fi
     # Mirror onto the serial line (needs explicit CRLF; ONLCR may be off).
     if [ -c /dev/ttyS0 ]; then
-        printf '%b' "$BANNER" | sed 's/$/\r/' > /dev/ttyS0 2>/dev/null || true
+        { printf '%b' "$BANNER"; printf '%b\n' "$NET"; } | sed 's/$/\r/' > /dev/ttyS0 2>/dev/null || true
     fi
 }
 
@@ -31,6 +36,14 @@ draw
 # Let the last burst of boot messages flush, then reclaim the screen once more
 # before polling for input (is-system-running can hang while getty awaits us).
 sleep 2
+
+# Snapshot network state once (after systemd-networkd/resolved should have
+# finished configuring) rather than re-fetching on every redraw.
+NET=$( { ip -br addr 2>/dev/null || true; printf '\n   networkd:\n'; \
+         systemctl is-active systemd-networkd 2>/dev/null; \
+         printf '   resolved:\n'; \
+         systemctl is-active systemd-resolved 2>/dev/null; } )
+
 draw
 
 # Wait for ENTER. The kernel console (/dev/console) has no input queue, so
