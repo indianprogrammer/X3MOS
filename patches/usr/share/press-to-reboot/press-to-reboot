@@ -13,29 +13,41 @@ set -u
 # Already done on a previous boot? Never show again.
 [ -e /var/lib/press-to-reboot.done ] && exit 0
 
-# /dev/console tracks the kernel console: tty0 for VGA, ttyS0 when booted
-# with console=ttyS0. Fall back to explicit devices if console is missing.
-C=/dev/console
-[ -c "$C" ] || C=/dev/tty1
+# Mirror the banner onto every console (VGA tty1, serial ttyS0, and
+# /dev/console whichever it maps to) so it is visible wherever the user is.
+for c in /dev/console /dev/tty1 /dev/ttyS0; do
+    [ -c "$c" ] || continue
+    printf '\n   =*=*   INSTALLATION COMPLETE   =*=\n' > "$c" 2>/dev/null || true
+    printf '   The system has been installed and the disc is out.\n' > "$c" 2>/dev/null || true
+    printf '   Credentials:\n' > "$c" 2>/dev/null || true
+    printf '     host : X3MOS\n' > "$c" 2>/dev/null || true
+    printf '     login: root   (password: x3m@root)\n' > "$c" 2>/dev/null || true
+    printf '     login: x3m    (password: x3m@root)\n' > "$c" 2>/dev/null || true
+    printf '   Press ENTER to reboot into your new system...\n\n' > "$c" 2>/dev/null || true
+done
 
-printf '\n   =*=*   INSTALLATION COMPLETE   =*=\n' > "$C"
-printf '   The system has been installed and the disc is out.\n' > "$C"
-printf '   Credentials:\n' > "$C"
-printf '     host : X3MOS\n' > "$C"
-printf '     login: root   (password: x3m@root)\n' > "$C"
-printf '     login: x3m    (password: x3m@root)\n' > "$C"
-printf '   Press ENTER to reboot into your new system...\n\n' > "$C"
-
-# Wait for a key/line. The chosen device blocks until ENTER; the unit's
-# TimeoutStartSec bounds the wait if nobody is at the console.
-read -r _ < "$C" 2>/dev/null \
-    || read -r _ < /dev/tty1 2>/dev/null \
-    || read -r _ < /dev/ttyS0 2>/dev/null || true
+# Wait for a key/line on either console. Keypresses are buffered by the tty,
+# so polling with a short timeout loses nothing. The unit's TimeoutStartSec
+# bounds the wait if nobody is at either console.
+while :; do
+    for c in /dev/tty1 /dev/ttyS0; do
+        [ -c "$c" ] || continue
+        if LC_ALL=C timeout 1 sh -c "read -r _ < '$c'" 2>/dev/null; then
+            entered=1
+            break 2
+        fi
+    done
+    sleep 1
+done
+[ -n "$entered" ] || exit 1
 
 sync
 touch /var/lib/press-to-reboot.done
 sync
 
-printf 'Rebooting now...\n' > "$C"
+for c in /dev/console /dev/tty1 /dev/ttyS0; do
+    [ -c "$c" ] || continue
+    printf 'Rebooting now...\n' > "$c" 2>/dev/null || true
+done
 systemctl reboot 2>/dev/null || reboot -f
 exit 0
