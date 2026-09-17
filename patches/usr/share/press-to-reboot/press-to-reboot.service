@@ -1,8 +1,8 @@
 [Unit]
 Description=Press ENTER to reboot (first boot)
-DefaultDependencies=no
-After=systemd-remount-fs.service
-Before=sysinit.target
+Wants=systemd-vconsole-setup.service
+After=systemd-vconsole-setup.service systemd-journald.service
+Before=getty.target
 ConditionPathExists=!/var/lib/press-to-reboot.done
 
 [Service]
@@ -11,7 +11,7 @@ StandardInput=tty
 StandardOutput=tty
 StandardError=tty
 ExecStart=/usr/local/sbin/press-to-reboot
-TimeoutStartSec=900
+TimeoutStartSec=300
 
 [Install]
-WantedBy=sysinit.target
+WantedBy=multi-user.target

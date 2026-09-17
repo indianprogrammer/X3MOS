@@ -1,51 +1,54 @@
 #!/bin/sh
-# Runs once on the FIRST boot of the installed system, before the OS is
-# fully brought up (invoked by press-to-reboot.service, ordered before
-# sysinit.target). Shows a banner on the console, waits for ENTER, then
-# reboots into the freshly installed system. VGA and serial consoles work.
+# Boots into the freshly installed system, exactly once: prints the login
+# credentials on the console, waits for ENTER (VGA or serial), then reboots
+# so the machine starts clean at the login prompt on the next boot.
 #
-# This is deterministic where an in-installer wait is not: at this point no
-# other process (installer frontend, getty, etc.) owns the console, so the
-# kernel delivers the keypress straight to this read.
+# Invoked by press-to-reboot.service just before getty.target, when the
+# console and keyboard are fully initialized and nothing else owns the screen.
 
 set -u
 
 # Already done on a previous boot? Never show again.
 [ -e /var/lib/press-to-reboot.done ] && exit 0
 
-# Mirror the banner onto every console (VGA tty1, serial ttyS0, and
-# /dev/console whichever it maps to) so it is visible wherever the user is.
-for c in /dev/console /dev/tty1 /dev/ttyS0; do
+BANNER='\n   =*=*   INSTALLATION COMPLETE   =*=\n   The system has been installed and the disc is out.\n   Credentials:\n     host : X3MOS\n     login: root   (password: x3m@root)\n     login: x3m    (password: x3m@root)\n   Press ENTER to reboot into your new system...\n\n'
+
+# StandardOutput=tty points stdout at /dev/console (the active VGA console).
+printf '%b' "$BANNER"
+# Mirror onto the serial line and VT1 for remote/other viewers.
+for c in /dev/ttyS0 /dev/tty1; do
     [ -c "$c" ] || continue
-    printf '\n   =*=*   INSTALLATION COMPLETE   =*=\n' > "$c" 2>/dev/null || true
-    printf '   The system has been installed and the disc is out.\n' > "$c" 2>/dev/null || true
-    printf '   Credentials:\n' > "$c" 2>/dev/null || true
-    printf '     host : X3MOS\n' > "$c" 2>/dev/null || true
-    printf '     login: root   (password: x3m@root)\n' > "$c" 2>/dev/null || true
-    printf '     login: x3m    (password: x3m@root)\n' > "$c" 2>/dev/null || true
-    printf '   Press ENTER to reboot into your new system...\n\n' > "$c" 2>/dev/null || true
+    printf '%b' "$BANNER" > "$c" 2>/dev/null || true
 done
 
-# Wait for a key/line on either console. Keypresses are buffered by the tty,
-# so polling with a short timeout loses nothing. The unit's TimeoutStartSec
-# bounds the wait if nobody is at either console.
-while :; do
-    for c in /dev/tty1 /dev/ttyS0; do
+# Wait for ENTER on the console (stdin is /dev/console too) or the serial
+# line. Keypresses are buffered by the tty, so polling loses nothing. If no
+# key arrives within ~300 s the boot just continues (matches TimeoutStartSec).
+entered=
+i=0
+while [ "$i" -lt 300 ]; do
+    if LC_ALL=C timeout 1 sh -c 'read -r _' 2>/dev/null; then
+        entered=1
+        break
+    fi
+    for c in /dev/ttyS0 /dev/tty1; do
         [ -c "$c" ] || continue
         if LC_ALL=C timeout 1 sh -c "read -r _ < '$c'" 2>/dev/null; then
             entered=1
             break 2
         fi
     done
+    i=$((i + 1))
     sleep 1
 done
-[ -n "$entered" ] || exit 1
+[ -n "$entered" ] || exit 0
 
 sync
 touch /var/lib/press-to-reboot.done
 sync
 
-for c in /dev/console /dev/tty1 /dev/ttyS0; do
+printf '\nRebooting now...\n'
+for c in /dev/ttyS0 /dev/tty1; do
     [ -c "$c" ] || continue
     printf 'Rebooting now...\n' > "$c" 2>/dev/null || true
 done
