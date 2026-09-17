@@ -252,7 +252,7 @@ else
     log "collecting URIs (kernel/grub closure)..."
     URIS=$(sudo chroot "$STAGE" apt-get install --print-uris --no-install-recommends \
         -y linux-image-amd64 grub-pc ifupdown iproute2 kmod busybox zstd \
-        console-setup keyboard-configuration \
+        console-setup keyboard-configuration sudo \
         2>/dev/null | grep -oE "'http[s]?://[^']+\.deb'" | tr -d "'" || true)
 
     # Also collect the base packages already installed in the stage.
