@@ -436,6 +436,12 @@ dpkg-deb -e "$CDSETUP_UDEB" "$CDSETUP_TMP/DEBIAN" >/dev/null || die "udeb contro
 dpkg-deb -x "$CDSETUP_UDEB" "$CDSETUP_TMP" >/dev/null || die "udeb data extract failed"
 cp "$PROJECT_DIR/patches/usr/lib/apt-setup/generators/40cdrom" \
    "$CDSETUP_TMP/usr/lib/apt-setup/generators/40cdrom" || die "patch file missing"
+# ALSO replace the stock finish-install.d/10apt-cdrom-setup hook. It runs at
+# lexical '10' AFTER preseed's 07preseed/late_command and would otherwise
+# re-edit /target/etc/apt/sources.list (commenting cdrom lines and appending a
+# "installed using removable media" block), clobbering the target overlay that
+# late_command just wrote. Replace with a no-op that never touches sources.list.
+printf '#!/bin/sh\nexit 0\n' > "$CDSETUP_TMP/usr/lib/finish-install.d/10apt-cdrom-setup"
 ( cd "$CDSETUP_TMP" && find . -type f -not -path './DEBIAN/*' | sort | \
   while read -r f; do printf '%s  %s\n' "$(md5sum "$f" | cut -d' ' -f1)" "${f#./}"; done \
   > DEBIAN/md5sums )

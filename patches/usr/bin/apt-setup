@@ -1,0 +1,39 @@
+#!/bin/sh
+set -e
+
+. /usr/share/debconf/confmodule
+
+# =============================================================================
+# Custom offline-build: the "Configure the package manager" step is
+# PERMANENTLY DISABLED.
+#
+# Stock d-i (/usr/bin/apt-setup) runs generator scripts (40cdrom, 50mirror,
+# ...) with NO timeout. On VirtualBox CD controllers, dead/unreachable
+# mirrors, or a missing device node that step can block forever on
+# "Configuring apt / Scanning the mirror / Running setup", and the GRUB
+# boot-loader step (grub-installer) is never reached.
+#
+# Nothing in this offline install needs the step:
+#   * base-installer already fetched every package from the on-disc pool,
+#   * pkgsel/tasksel are disabled in preseed.cfg,
+#   * grub-installer fetches grub-pc itself via apt-install from /cdrom.
+#
+# This replacement finishes the step instantly and ALWAYS exits 0:
+# d-i then jumps straight to pkgsel -> GRUB boot loader -> finish.
+# It never touches the target's /etc/apt/sources.list; the late_command
+# overlay is the only thing allowed to populate it.
+# =============================================================================
+
+log() { logger -t apt-setup "$@"; }
+
+db_capb backup progresscancel || true
+
+# Advance the progress bar cleanly so the menu moves on without spinning.
+db_progress START 0 100 apt-setup/progress/title || true
+db_progress INFO apt-setup/progress/run || true
+db_progress SET 100 || true
+db_progress STOP || true
+
+db_capb backup
+log "apt-setup permanently disabled for offline auto-install; jumping to pkgsel -> grub-installer"
+exit 0
