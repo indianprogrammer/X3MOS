@@ -11,27 +11,36 @@ set -u
 # Already done on a previous boot? Never show again.
 [ -e /var/lib/press-to-reboot.done ] && exit 0
 
+# NOTE: /dev/console with console=tty0 maps to the active VT (tty1), so the
+# banner is written to /dev/console once and mirrored to the serial line only.
+# Writing /dev/tty1 explicitly too would double every line on the VGA screen.
 BANNER='\n   =*=*   INSTALLATION COMPLETE   =*=\n   The system has been installed and the disc is out.\n   Credentials:\n     host : X3MOS\n     login: root   (password: x3m@root)\n     login: x3m    (password: x3m@root)\n   Press ENTER to reboot into your new system...\n\n'
 
-# StandardOutput=tty points stdout at /dev/console (the active VGA console).
-printf '%b' "$BANNER"
-# Mirror onto the serial line and VT1 for remote/other viewers.
-for c in /dev/ttyS0 /dev/tty1; do
-    [ -c "$c" ] || continue
-    printf '%b' "$BANNER" > "$c" 2>/dev/null || true
-done
+# Draw the banner. clear+redraw is idempotent, so calling it repeatedly keeps
+# the screen clean even if boot services print console output while we wait.
+draw() {
+    # StandardOutput=tty points stdout at /dev/console (the active VGA console).
+    printf '\033[2J\033[H%b' "$BANNER"
+    # Mirror onto the serial line (needs explicit CRLF; ONLCR may be off).
+    if [ -c /dev/ttyS0 ]; then
+        printf '%b' "$BANNER" | sed 's/$/\r/' > /dev/ttyS0 2>/dev/null || true
+    fi
+}
 
-# Wait for ENTER on the console (stdin is /dev/console too) or the serial
-# line. Keypresses are buffered by the tty, so polling loses nothing. If no
+draw
+# Let the last burst of boot messages flush, then reclaim the screen once more
+# before polling for input (is-system-running can hang while getty awaits us).
+sleep 2
+draw
+
+# Wait for ENTER. The kernel console (/dev/console) has no input queue, so
+# keypresses are polled from the real input ttys: /dev/tty1 (VGA) and
+# /dev/ttyS0 (serial). Buffering by the tty means polling loses nothing; if no
 # key arrives within ~300 s the boot just continues (matches TimeoutStartSec).
 entered=
 i=0
 while [ "$i" -lt 300 ]; do
-    if LC_ALL=C timeout 1 sh -c 'read -r _' 2>/dev/null; then
-        entered=1
-        break
-    fi
-    for c in /dev/ttyS0 /dev/tty1; do
+    for c in /dev/tty1 /dev/ttyS0; do
         [ -c "$c" ] || continue
         if LC_ALL=C timeout 1 sh -c "read -r _ < '$c'" 2>/dev/null; then
             entered=1
@@ -39,18 +48,23 @@ while [ "$i" -lt 300 ]; do
         fi
     done
     i=$((i + 1))
+    # Re-draw every 5s so any interleaved boot output is overwritten.
+    if [ $((i % 5)) -eq 0 ]; then
+        draw
+    fi
     sleep 1
 done
 [ -n "$entered" ] || exit 0
+
+printf '\033[2J\033[HEnter received.\n'
+if [ -c /dev/ttyS0 ]; then
+    printf 'Enter received.\n' | sed 's/$/\r/' > /dev/ttyS0 2>/dev/null || true
+fi
 
 sync
 touch /var/lib/press-to-reboot.done
 sync
 
-printf '\nRebooting now...\n'
-for c in /dev/ttyS0 /dev/tty1; do
-    [ -c "$c" ] || continue
-    printf 'Rebooting now...\n' > "$c" 2>/dev/null || true
-done
+sleep 1
 systemctl reboot 2>/dev/null || reboot -f
 exit 0
