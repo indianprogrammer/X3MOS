@@ -263,9 +263,19 @@ else
     # compression for initramfs-tools) before the kernel; without their .deb in
     # the pool the installer dies at "Unable to install <pkg>".
     log "collecting URIs (kernel/grub closure)..."
+    # Network tooling + resolvers: bring all interfaces up with DHCP on the
+    # installed system (systemd-networkd), provide DNS resolution
+    # (systemd-resolved) and the usual utilities (ping/nslookup/dig/host,
+    # dhclient/dhcpcd, ifconfig/netstat/route, traceroute, curl/wget,
+    # ethtool/tcpdump/nc, ssh/scp). These are installed into the target via
+    # pkgsel/include (--no-install-recommends, see pkgsel patch below) so the
+    # plain closure here is exactly what the target needs.
     URIS=$(sudo chroot "$STAGE" apt-get install --print-uris --no-install-recommends \
         -y linux-image-amd64 grub-pc ifupdown iproute2 kmod busybox zstd \
         console-setup keyboard-configuration sudo \
+        iputils-ping bind9-dnsutils isc-dhcp-client dhcpcd-base net-tools \
+        curl wget traceroute ethtool tcpdump netcat-openbsd openssh-client \
+        systemd-resolved systemd-timesyncd \
         2>/dev/null | grep -oE "'http[s]?://[^']+\.deb'" | tr -d "'" || true)
 
     # Also collect the base packages already installed in the stage.
@@ -477,6 +487,30 @@ dpkg-deb -Zgzip --build "$SETUP_TMP" "$WORK_DIR/apt-setup-udeb_0.198_patched_amd
 cp "$WORK_DIR/apt-setup-udeb_0.198_patched_amd64.udeb" "$SETUP_UDEB" || die "replace apt-setup udeb failed"
 ok "apt-setup udeb patched: $(md5sum "$WORK_DIR/apt-setup-udeb_0.198_patched_amd64.udeb" | cut -d' ' -f1)"
 
+# --- patch pkgsel so pkgsel/include installs WITHOUT Recommends --------------
+# pkgsel/include drives the `apt-get install` of our extra package set (network
+# tools, systemd-resolved, ssh, etc.). Stock pkgsel installs Recommends too,
+# but those Recommends (xauth, python3, ca-certificates, ...) are NOT part of
+# the offline pool closure (built with --no-install-recommends); apt would try
+# to fetch them from a mirror and fail the whole install. Force the include
+# step to only take the exact closure present on the CD.
+log "patching pkgsel-udeb/DEBIAN/postinst (no-install-recommends for includes)..."
+PKGSEL_UDEB="$UDEB_POOLROOT/pool/main/p/pkgsel/pkgsel_0.85_all.udeb"
+PKGSEL_TMP="$WORK_DIR/pkgsel-udeb.patch"
+rm -rf "$PKGSEL_TMP"; mkdir -p "$PKGSEL_TMP/DEBIAN"
+dpkg-deb -e "$PKGSEL_UDEB" "$PKGSEL_TMP/DEBIAN" >/dev/null || die "pkgsel udeb control extract failed"
+dpkg-deb -x "$PKGSEL_UDEB" "$PKGSEL_TMP" >/dev/null || die "pkgsel udeb data extract failed"
+sed -i 's/apt-get -q -y install -- \$RET/apt-get -q -y --no-install-recommends install -- $RET/' \
+    "$PKGSEL_TMP/DEBIAN/postinst"
+( cd "$PKGSEL_TMP" && find . -type f -not -path './DEBIAN/*' | sort | \
+  while read -r f; do printf '%s  %s\n' "$(md5sum "$f" | cut -d' ' -f1)" "${f#./}"; done \
+  > DEBIAN/md5sums )
+rm -f "$WORK_DIR/pkgsel_0.85_all.udeb"
+dpkg-deb -Zgzip --build "$PKGSEL_TMP" "$WORK_DIR/pkgsel_0.85_all.udeb" >/dev/null \
+    || die "pkgsel udeb rebuild failed"
+cp "$WORK_DIR/pkgsel_0.85_all.udeb" "$PKGSEL_UDEB" || die "replace pkgsel udeb failed"
+ok "pkgsel udeb patched: $(md5sum "$WORK_DIR/pkgsel_0.85_all.udeb" | cut -d' ' -f1)"
+
 log "=== [5/5] assemble ISO ==="
 ISO="$WORK_DIR/iso"
 sudo rm -rf "$ISO"
@@ -531,15 +565,16 @@ cp -a "$UDEB_POOLROOT"/pool "$ISO/"
 log "generating installer udeb Packages index..."
 cp "$UDEB_PKGS" "$ISO/dists/$SUITE/$DEBINST_COMP/Packages"
 
-# The patched apt-cdrom-setup and apt-setup-udeb udebs differ from the mirror
-# ones, so their Size/MD5sum/SHA hashes in the index must be refreshed or
-# anna refuses them.
+# The patched apt-cdrom-setup, apt-setup-udeb and pkgsel udebs differ from the
+# mirror ones, so their Size/MD5sum/SHA hashes in the index must be refreshed
+# or anna refuses them.
 log "refreshing patched udeb hashes in the udeb Packages index..."
 _PPKG="$ISO/dists/$SUITE/$DEBINST_COMP/Packages"
-for _PNAME in apt-cdrom-setup apt-setup-udeb; do
+for _PNAME in apt-cdrom-setup apt-setup-udeb pkgsel; do
     case "$_PNAME" in
         apt-cdrom-setup) _PUD="$ISO/pool/main/a/apt-setup/apt-cdrom-setup_0.198_all.udeb";;
         apt-setup-udeb)  _PUD="$ISO/pool/main/a/apt-setup/apt-setup-udeb_0.198_amd64.udeb";;
+        pkgsel)          _PUD="$ISO/pool/main/p/pkgsel/pkgsel_0.85_all.udeb";;
     esac
     python3 - "$_PPKG" "$_PNAME" \
         "$(stat -c%s "$_PUD")" \
