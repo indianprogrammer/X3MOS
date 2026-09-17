@@ -36,6 +36,9 @@ It is tested in VirtualBox (VGA and serial console).
 - **Dual console**: kernel and GRUB are configured for `tty0` (VGA) **and**
   `ttyS0` (serial, 115200 8N1); `serial-getty@ttyS0` is enabled so a headless
   install is observable and usable over a serial cable.
+- **All interfaces up with DHCP on boot**: `systemd-networkd` (built-in DHCP
+  client, no extra package) brings every interface up via DHCP, and
+  `systemd-resolved` provides DNS (stub `resolv.conf`).
 - **VirtualBox-safe apt-cdrom setup**: the installer's `apt-cdrom-setup`
   `40cdrom` generator is patched so it never block-probes the VM's CD
   controller (that freeze was the classic "Scanning the mirror" hang).
@@ -156,6 +159,9 @@ drives the unattended path. Every question is either preseeded or marked
 
 - **Console**: kernel cmdline `console=ttyS0,115200n8 console=tty0`;
   GRUB terminal `console serial`; `serial-getty@ttyS0` enabled.
+- **Network**: `systemd-networkd` + `systemd-resolved` enabled; a
+  `Name=*` `.network` unit brings **all** interfaces up with DHCP on boot
+  (`/etc/resolv.conf` → systemd stub).
 - **apt**: offline stub sources (`# OFFLINE …` in `/etc/apt/sources.list`);
   no mirror, no network usage.
 - **First boot**: `press-to-reboot.service` (ordered just before
