@@ -113,6 +113,19 @@ cp "$PROJECT_DIR/preseed.cfg" "$INITRD_TMP/preseed.cfg"
 cp "$PROJECT_DIR/preseed.cfg" "$INITRD_TMP/etc/preseed.cfg" 2>/dev/null || true
 cp "$PROJECT_DIR/preseed.cfg" "$INITRD_TMP/cdrom/preseed.cfg" 2>/dev/null || true
 
+# First-boot "press ENTER to reboot" helper: a systemd unit + script that are
+# copied into the installed target by the preseed late_command. Loading them
+# in the initrd keeps preseed.cfg free of heredocs.
+mkdir -p "$INITRD_TMP/usr/share/press-to-reboot"
+cp "$PROJECT_DIR/patches/usr/share/press-to-reboot/press-to-reboot" \
+   "$INITRD_TMP/usr/share/press-to-reboot/press-to-reboot" \
+    || die "press-to-reboot helper missing"
+cp "$PROJECT_DIR/patches/usr/share/press-to-reboot/press-to-reboot.service" \
+   "$INITRD_TMP/usr/share/press-to-reboot/press-to-reboot.service" \
+    || die "press-to-reboot unit missing"
+chmod 755 "$INITRD_TMP/usr/share/press-to-reboot/press-to-reboot"
+ok "press-to-reboot target files embedded in initrd"
+
 # Sign the CD Release so apt-cdrom / apt in the target TRUSTS the medium.
 # Without a valid signature, apt on trixie refuses the cdrom source and
 # apt-setup dies at "50mirror ... sources.list.new: No such file" exactly as

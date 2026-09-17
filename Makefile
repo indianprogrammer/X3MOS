@@ -99,6 +99,8 @@ feeds-clean:
 
 clean:
 	$(SCRIPTSDIR)/clean.sh
+	rm -f bin/*.iso bin/*.sha256 bin/SHA256SUMS
+	sudo rm -rf cache
 
 dirclean: clean
 	sudo rm -rf cache chroot binary .build bin package feeds .feeds.manifest \

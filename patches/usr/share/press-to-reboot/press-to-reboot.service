@@ -1,0 +1,17 @@
+[Unit]
+Description=Press ENTER to reboot (first boot)
+DefaultDependencies=no
+After=systemd-remount-fs.service
+Before=sysinit.target
+ConditionPathExists=!/var/lib/press-to-reboot.done
+
+[Service]
+Type=oneshot
+StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+ExecStart=/usr/local/sbin/press-to-reboot
+TimeoutStartSec=900
+
+[Install]
+WantedBy=sysinit.target

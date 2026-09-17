@@ -15,3 +15,7 @@ build.log*
 *.iso
 *.sha256
 *.zsync*
+
+# installer offline-disk build cache and stray logs
+.installer-build/
+nographic.log
