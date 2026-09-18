@@ -275,8 +275,8 @@ else
         console-setup keyboard-configuration sudo \
         iputils-ping bind9-dnsutils isc-dhcp-client dhcpcd-base net-tools \
         ca-certificates \
-        curl wget traceroute ethtool tcpdump netcat-openbsd openssh-client \
-        openssh-server systemd-resolved systemd-timesyncd \
+        curl wget traceroute ethtool tcpdump netcat-openbsd mtr-tiny htop openssh-client \
+        openssh-server systemd-timesyncd \
         2>/dev/null | grep -oE "'http[s]?://[^']+\.deb'" | tr -d "'" || true)
 
     # Also collect the base packages already installed in the stage.

@@ -38,7 +38,8 @@ It is tested in VirtualBox (VGA and serial console).
   install is observable and usable over a serial cable.
 - **All interfaces up with DHCP on boot**: a `dhclient-all.service` (oneshot,
   provided by the `chroot/` overlay) runs `dhclient` on every interface at
-  boot, and `systemd-resolved` provides DNS (stub `resolv.conf`).
+  boot; the lease's nameservers are written straight into `/etc/resolv.conf`
+  (no `systemd-resolved`, so nothing steals DNS).
 - **Login banner**: the console login prompt shows an `X3M-OS` ASCII-art
   banner from `/etc/issue` (via getty).
 - **Target overlay (`chroot/`)**: any file placed under `chroot/` is copied
@@ -170,8 +171,8 @@ drives the unattended path. Every question is either preseeded or marked
   login prompt (MOTD is disabled: `/etc/motd` is empty and
   `/etc/update-motd.d/10-uname` is a no-op).
 - **Network**: `dhclient-all.service` brings **all** interfaces up with DHCP
-  at boot (runs `/usr/sbin/dhclient`; `/etc/resolv.conf` → systemd stub from
-  `systemd-resolved`).
+  at boot (runs `/usr/sbin/dhclient`; `/etc/resolv.conf` is a plain file that
+  dhclient fills with the DHCP nameservers — `systemd-resolved` is not used).
 - **SSH**: `openssh-server` installed and enabled (`ssh.service`); the root
   login drop-in (`chroot/etc/ssh/sshd_config.d/10-rootlogin.conf`) allows
   `PermitRootLogin yes` to match the root-only login design.
