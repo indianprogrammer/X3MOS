@@ -4,6 +4,7 @@ cache/
 .build/
 bin/
 !patches/usr/bin/
+!chroot/usr/local/bin/
 source/
 tftpboot/
 package/feeds/

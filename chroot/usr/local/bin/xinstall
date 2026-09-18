@@ -1,0 +1,70 @@
+#!/bin/sh
+# xinstall - install menu for the installed X3M-OS system.
+#
+#   xinstall
+#
+# Options:
+#   1) Docker Engine on Debian    (https://docs.docker.com/engine/install/debian/)
+#   2) Ookla Speedtest Server     (https://srijit.com/ookla-speedtest-server-installation-guide/)
+#
+# Invoked by the normal (x3m) user. The menu re-executes itself under sudo
+# because every option performs a system-wide installation.
+
+LIB=/usr/local/lib/xinstall
+[ -r "$LIB/lib.sh" ] && . "$LIB/lib.sh" || exit 1
+
+require_root
+
+BOLD=$([ -t 1 ] && tput bold 2>/dev/null || true)
+NORM=$([ -t 1 ] && tput sgr0 2>/dev/null || true)
+
+docker_status() {
+    if command -v docker >/dev/null 2>&1; then
+        printf 'installed'
+    else
+        printf 'not installed'
+    fi
+}
+
+speedtest_status() {
+    if [ -x /opt/ooklaserver/OoklaServer ]; then
+        printf 'installed'
+    else
+        printf 'not installed'
+    fi
+}
+
+while :; do
+    clear
+    printf '\n'
+    printf '%s\n' \
+        "${BOLD}========================================================${NORM}" \
+        "${BOLD}              X3M-OS install menu${NORM}" \
+        "${BOLD}========================================================${NORM}" \
+        '' \
+        "  [1] Install Docker Engine          (status: $(docker_status))" \
+        "      Adds Docker's official apt repository, installs docker-ce," \
+        "      containerd.io and the compose/buildx plugins, enables the" \
+        "      service and adds your user to the 'docker' group." \
+        "      Guide: https://docs.docker.com/engine/install/debian/" \
+        '' \
+        "  [2] Install Ookla Speedtest Server (status: $(speedtest_status))" \
+        "      Downloads and runs the official ooklaserver.sh, installs the" \
+        "      daemon under /opt/ooklaserver and registers a systemd unit" \
+        "      so it auto-starts at boot (listens on TCP 8080)." \
+        "      Guide: https://srijit.com/ookla-speedtest-server-installation-guide/" \
+        '' \
+        '  [3] Quit' \
+        ''
+
+    printf 'Choose an option [1-3]: '
+    read -r choice
+    case "$choice" in
+        1) "$LIB/install-docker.sh";;
+        2) "$LIB/install-speedtest.sh";;
+        3) exit 0;;
+        *) continue;;
+    esac
+    printf '\nPress ENTER to return to the menu...'
+    read -r _ 2>/dev/null || true
+done

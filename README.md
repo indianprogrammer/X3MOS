@@ -33,6 +33,12 @@ It is tested in VirtualBox (VGA and serial console).
 - **`sudo` pre-installed**: user `x3m` is a member of the `sudo` group, so
   `sudo`, `sudo reboot`, `sudo halt`, `sudo poweroff` work for the non-root
   account (root login is also enabled).
+- **`xinstall` install menu**: running `xinstall` on the installed system
+  opens an interactive menu that installs **Docker Engine** (Docker's apt
+  repository method, per `docs.docker.com`) or an **Ookla Speedtest Server**
+  (official `ooklaserver.sh` into `/opt/ooklaserver` with a systemd auto-start
+  unit, per Srijit Banerjee's guide). Runs as the normal user; elevates via
+  sudo automatically.
 - **Dual console**: kernel and GRUB are configured for `tty0` (VGA) **and**
   `ttyS0` (serial, 115200 8N1); `serial-getty@ttyS0` is enabled so a headless
   install is observable and usable over a serial cable.
@@ -182,6 +188,51 @@ drives the unattended path. Every question is either preseeded or marked
 - **First boot**: `press-to-reboot.service` (ordered just before
   `getty.target`) shows the credentials banner on the active console, waits
   for ENTER on VGA and serial, then reboots once into a clean login.
+
+---
+
+## Install menu (`xinstall`)
+
+`chroot/usr/local/bin/xinstall` ships on the installed system and gives a
+simple menu to install optional services:
+
+```
+$ xinstall
+========================================================
+              X3M-OS install menu
+========================================================
+
+  [1] Install Docker Engine          (status: not installed)
+      Adds Docker's official apt repository, installs docker-ce,
+      containerd.io and the compose/buildx plugins, enables the
+      service and adds your user to the 'docker' group.
+      Guide: https://docs.docker.com/engine/install/debian/
+
+  [2] Install Ookla Speedtest Server (status: not installed)
+      Downloads and runs the official ooklaserver.sh, installs the
+      daemon under /opt/ooklaserver and registers a systemd unit
+      so it auto-starts at boot (listens on TCP 8080).
+      Guide: https://srijit.com/ookla-speedtest-server-installation-guide/
+
+  [3] Quit
+```
+
+- Runs as the normal user (`x3m`) and re-executes itself under sudo for the
+  install steps (every option is a system-wide installation).
+- **Docker** follows the "Install using the apt repository" method: removes
+  conflicting packages, adds the GPG key + `docker.sources`, installs
+  `docker-ce docker-ce-cli containerd.io docker-buildx-plugin
+  docker-compose-plugin`, enables the service and adds `x3m` to the `docker`
+  group.
+- **Speedtest** follows Srijit Banerjee's guide: `wget` the official script,
+  `./ooklaserver.sh install` into `/opt/ooklaserver`, applies the recommended
+  `OoklaServer.properties` settings, and registers a `systemd` unit
+  (`ooklaserver.service`, the native replacement for the guide's rc.local
+  method) so the daemon starts at boot and listens on TCP 8080.
+- The pieces live in `chroot/usr/local/bin/xinstall` (menu) and
+  `chroot/usr/local/lib/xinstall/` (`lib.sh`, `install-docker.sh`,
+  `install-speedtest.sh`); they are applied via the `chroot/` overlay, so
+  rebuild the ISO after changing them.
 
 ---
 
