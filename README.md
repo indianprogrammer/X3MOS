@@ -32,13 +32,15 @@ It is tested in VirtualBox (VGA and serial console).
   reboots into a clean login prompt. The banner runs once only.
 - **`sudo` pre-installed**: user `x3m` is a member of the `sudo` group, so
   `sudo`, `sudo reboot`, `sudo halt`, `sudo poweroff` work for the non-root
-  account.
+  account (root login is also enabled).
 - **Dual console**: kernel and GRUB are configured for `tty0` (VGA) **and**
   `ttyS0` (serial, 115200 8N1); `serial-getty@ttyS0` is enabled so a headless
   install is observable and usable over a serial cable.
-- **All interfaces up with DHCP on boot**: `systemd-networkd` (built-in DHCP
-  client, no extra package) brings every interface up via DHCP, and
-  `systemd-resolved` provides DNS (stub `resolv.conf`).
+- **All interfaces up with DHCP on boot**: a `dhclient-all.service` (oneshot,
+  provided by the `chroot/` overlay) runs `dhclient` on every interface at
+  boot, and `systemd-resolved` provides DNS (stub `resolv.conf`).
+- **Login banner**: the console login prompt shows an `X3M-OS` ASCII-art
+  banner from `/etc/issue` (via getty).
 - **Target overlay (`chroot/`)**: any file placed under `chroot/` is copied
   verbatim onto the installed system at install time, e.g.
   `chroot/etc/apt/sources.list` → `/etc/apt/sources.list`. This is the
@@ -148,8 +150,8 @@ sudo ./scripts/check.sh           # configuration sanity
 | Mirror                 | `mirror/protocol select cdrom`, `apt-setup/*` disabled  |
 | Installed files        | `chroot/` overlay (copied onto `/target` by `late_command`) |
 | Partitioning           | `partman-auto/*` (`atomic` recipe on first disk)        |
-| Accounts               | `passwd/*`, forced again by `late_command` `chpasswd`   |
-| `sudo`                 | `pkgsel/include string sudo`, user in `sudo` group      |
+| Accounts               | `passwd/*` (root + `x3m`), forced again by `late_command` `chpasswd` |
+| Extra packages (`curl`, `sudo`, DNS/net tools...) | `late_command` `apt-get install` from the mounted CD pool |
 | Bootloader             | `grub-installer/*`                                      |
 | Disc eject + target offline | `late_command`                                   |
 | First-boot banner/ENTER| `late_command` installs `press-to-reboot.service`      |
@@ -164,9 +166,15 @@ drives the unattended path. Every question is either preseeded or marked
 
 - **Console**: kernel cmdline `console=ttyS0,115200n8 console=tty0`;
   GRUB terminal `console serial`; `serial-getty@ttyS0` enabled.
-- **Network**: `systemd-networkd` + `systemd-resolved` enabled; a
-  `Name=*` `.network` unit brings **all** interfaces up with DHCP on boot
-  (`/etc/resolv.conf` → systemd stub).
+- **Login banner**: `/etc/issue` shows an `X3M-OS` ASCII-art banner at the
+  login prompt (MOTD is disabled: `/etc/motd` is empty and
+  `/etc/update-motd.d/10-uname` is a no-op).
+- **Network**: `dhclient-all.service` brings **all** interfaces up with DHCP
+  at boot (runs `/usr/sbin/dhclient`; `/etc/resolv.conf` → systemd stub from
+  `systemd-resolved`).
+- **SSH**: `openssh-server` installed and enabled (`ssh.service`); the root
+  login drop-in (`chroot/etc/ssh/sshd_config.d/10-rootlogin.conf`) allows
+  `PermitRootLogin yes` to match the root-only login design.
 - **apt**: offline stub sources by default (`# OFFLINE …` in
   `/etc/apt/sources.list`); override with `chroot/etc/apt/sources.list`
   (the overlay is applied last and therefore wins).
@@ -227,12 +235,14 @@ debian-trixie-netinst-amd64.iso  build output (gitignored ISO)
   unit is ordered so it runs only after the console/keyboard are fully up;
   if you still see no banner after ~5 minutes the unit timed out and the boot
   continued. Check `systemctl status press-to-reboot` after login.
-- **`sudo` missing / not in PATH** — `sudo` is now part of the base install;
-  rebuild with `--force` if you are running a cached pool. `reboot`/`halt`
-  live in `/usr/sbin` (not in a normal user's PATH); use `sudo reboot` or
-  become root.
+- **`reboot`/`halt` not found for a non-root user** — those live in
+  `/usr/sbin`, which only root has on PATH. Only `root` can log in on this
+  system (password `x3m@root`), so they are already reachable.
+- **`curl https://...` fails with "error setting certificate file"** — the
+  CA bundle `ca-certificates` is now part of the extra-package set; if you
+  still hit the error, rebuild the ISO (it embeds the updated package list).
 - **Cannot log in as root** — root login is enabled (`passwd/root-login
-  true`); `late_command` force-sets both passwords with `chpasswd`.
-  Password is `x3m@root`.
+  true`); `late_command` force-sets the `root` and `x3m` passwords with
+  `chpasswd`. Password is `x3m@root`.
 - **Build fails in the pool step** — make sure the build host has network
   access to `deb.debian.org`; rerun with `--force`.

@@ -274,8 +274,9 @@ else
         -y linux-image-amd64 grub-pc ifupdown iproute2 kmod busybox zstd \
         console-setup keyboard-configuration sudo \
         iputils-ping bind9-dnsutils isc-dhcp-client dhcpcd-base net-tools \
+        ca-certificates \
         curl wget traceroute ethtool tcpdump netcat-openbsd openssh-client \
-        systemd-resolved systemd-timesyncd \
+        openssh-server systemd-resolved systemd-timesyncd \
         2>/dev/null | grep -oE "'http[s]?://[^']+\.deb'" | tr -d "'" || true)
 
     # Also collect the base packages already installed in the stage.

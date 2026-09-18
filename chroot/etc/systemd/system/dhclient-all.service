@@ -1,0 +1,13 @@
+[Unit]
+Description=Bring up all network interfaces with DHCP (dhclient)
+After=network-pre.target
+Wants=network.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sh -c 'for i in /sys/class/net/*; do ip link set "${i##*/}" up 2>/dev/null || true; done'
+ExecStart=/usr/sbin/dhclient
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
