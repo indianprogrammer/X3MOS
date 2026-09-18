@@ -35,10 +35,10 @@ It is tested in VirtualBox (VGA and serial console).
   account (root login is also enabled).
 - **`xinstall` install menu**: running `xinstall` on the installed system
   opens an interactive menu that installs **Docker Engine** (Docker's apt
-  repository method, per `docs.docker.com`) or an **Ookla Speedtest Server**
+  repository method, per `docs.docker.com`), an **Ookla Speedtest Server**
   (official `ooklaserver.sh` into `/opt/ooklaserver` with a systemd auto-start
-  unit, per Srijit Banerjee's guide). Runs as the normal user; elevates via
-  sudo automatically.
+  unit, per Srijit Banerjee's guide) or a **CGNAT (Jool)** carrier-grade NAT
+  (per `cgnat.sh`). Runs as the normal user; elevates via sudo automatically.
 - **Dual console**: kernel and GRUB are configured for `tty0` (VGA) **and**
   `ttyS0` (serial, 115200 8N1); `serial-getty@ttyS0` is enabled so a headless
   install is observable and usable over a serial cable.
@@ -214,7 +214,13 @@ $ xinstall
       so it auto-starts at boot (listens on TCP 8080).
       Guide: https://srijit.com/ookla-speedtest-server-installation-guide/
 
-  [3] Quit
+  [3] Install CGNAT (Jool)           (status: not installed)
+      Carrier-Grade NAT: installs jool-dkms/jool-tools, enables IPv4
+      forwarding and configures NAT44 over the private RFC 6598 pool
+      100.64.0.0/10 (asks for the public IP pool, ports 1024-65535).
+      Reference: cgnat.sh
+
+  [4] Quit
 ```
 
 - Runs as the normal user (`x3m`) and re-executes itself under sudo for the
@@ -229,10 +235,15 @@ $ xinstall
   `OoklaServer.properties` settings, and registers a `systemd` unit
   (`ooklaserver.service`, the native replacement for the guide's rc.local
   method) so the daemon starts at boot and listens on TCP 8080.
+- **CGNAT** follows `cgnat.sh`: installs `jool-dkms` + `jool-tools`, enables
+  IPv4 forwarding, writes `/etc/jool/jool.conf` (private pool
+  `100.64.0.0/10`) and an `init-cgnat.sh` that registers a stateful NAT44
+  Jool instance over **your** public IP pool (asked interactively) with the
+  default source port range `1024-65535`, run via the `cgnat.service` oneshot.
 - The pieces live in `chroot/usr/local/bin/xinstall` (menu) and
   `chroot/usr/local/lib/xinstall/` (`lib.sh`, `install-docker.sh`,
-  `install-speedtest.sh`); they are applied via the `chroot/` overlay, so
-  rebuild the ISO after changing them.
+  `install-speedtest.sh`, `install-cgnat.sh`); they are applied via the
+  `chroot/` overlay, so rebuild the ISO after changing them.
 
 ---
 
