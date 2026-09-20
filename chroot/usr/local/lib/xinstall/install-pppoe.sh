@@ -22,6 +22,17 @@ LIB=/usr/local/lib/xinstall
 [ -r "$LIB/lib.sh" ] && . "$LIB/lib.sh" || exit 1
 require_root
 
+# apt wrapper: wait out competing apt/dpkg/unattended-upgrades and give apt a
+# long lock timeout, so a concurrent package manager cannot hard-fail install.
+apty() {
+    for _i in $(seq 1 30); do
+        pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1 \
+            || pgrep -x unattended-upgrade >/dev/null 2>&1 || break
+        sleep 5
+    done
+    apt-get -o DPkg::Lock::Timeout=300 "$@"
+}
+
 # ---- configuration (defaults) ------------------------------------------------
 CFG_DIR=$(conf_dir)/pppoe
 mkdir -p "$CFG_DIR"
@@ -165,23 +176,25 @@ webhook_configure() {
 # ---- unit + enable-at-boot -----------------------------------------------------
 reload_unit() {
     ifaces=$(conf_get IFACES)
-    cat > /etc/systemd/system/pppoe-server@.service <<'XEOF'
+    local_ip=$(conf_get LOCAL_IP)
+    cat > /etc/systemd/system/pppoe-server@.service <<XEOF
 [Unit]
 Description=PPPoE access server on %i
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
-ExecStartPre=/usr/local/lib/xinstall/pppoe-common.sh pre
-ExecStart=/usr/sbin/pppoe-server -I %i -C /etc/ppp/pppoe-server-options
-ExecStartPost=/usr/local/lib/xinstall/pppoe-webhook.sh up
+Type=forking
+PIDFile=/run/pppoe-server-%i.pid
+ExecStartPre=/bin/sh -c 'ip link set up dev %i 2>/dev/null || true'
+ExecStart=/usr/sbin/pppoe-server -q /usr/sbin/pppd -I %i -O /etc/ppp/pppoe-server-options -p /etc/ppp/ipaddress_pool -L $local_ip -X /run/pppoe-server-%i.pid
 Restart=on-failure
 RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
 XEOF
+    systemctl daemon-reload >/dev/null 2>&1 || true
     say ""
     [ -n "$ifaces" ] || return
     for i in $ifaces; do
@@ -189,7 +202,60 @@ XEOF
     done
 }
 
-# (per-interface loop lives in pppoe-common.sh so the unit is tiny)
+# ---- server packages + config files (reference PPPoE server setup) -------------
+install_packages() {
+    if [ -x /usr/sbin/pppoe-server ]; then
+        say "    pppoe-server already installed."
+        return
+    fi
+    say "    Installing ppp pppoe iptables ..."
+    if apty update && apty install -y --no-install-recommends ppp pppoe iptables; then
+        say "    -> packages installed."
+    else
+        say "    WARNING: could not install ppp/pppoe/iptables - server may not start (offline pool?)."
+    fi
+}
+
+write_server_options() {
+    cat > /etc/ppp/pppoe-server-options <<'XEOF'
+# Require CHAP authentication
+require-chap
+login
+
+# DNS Servers sent to clients
+ms-dns 1.1.1.1
+ms-dns 8.8.8.8
+
+# LCP Keepalive
+lcp-echo-interval 10
+lcp-echo-failure 2
+
+# Network constraints
+netmask 255.255.255.0
+proxyarp
+ktune
+nobsdcomp
+noccp
+novj
+XEOF
+    say "    wrote /etc/ppp/pppoe-server-options (require-chap, ms-dns 1.1.1.1/8.8.8.8, netmask 255.255.255.0)."
+}
+
+write_ip_pool() {
+    cat > /etc/ppp/ipaddress_pool <<'XEOF'
+10.0.0.100-200
+XEOF
+    chmod 600 /etc/ppp/ipaddress_pool
+    say "    wrote /etc/ppp/ipaddress_pool (10.0.0.100-200)."
+}
+
+ensure_chap() {
+    [ -f /etc/ppp/chap-secrets ] || cat > /etc/ppp/chap-secrets <<'XEOF'
+# Client          Server    Secret         IP addresses
+XEOF
+    chmod 600 /etc/ppp/chap-secrets
+    say "    /etc/ppp/chap-secrets ready (add subscriber accounts under option 2)."
+}
 say "  PPPoE server installer (X3M-OS)"
 ensure_conf
 say ""
@@ -199,7 +265,7 @@ say "  RADIUS:                    $( [ "$(conf_get RADIUS)" = 1 ] && echo 'ON (l
 say "  Webhook:                   $( [ "$(conf_get WEBHOOK)" = 1 ] && echo "ON -> $(conf_get WEBHOOK_URL)" || echo 'OFF' )"
 say ""
 say "  Choose: [1] interfaces   [2] local users   [3] RADIUS on/off"
-say "          [4] webhook      [5] start at boot  [q] quit"
+say "          [4] webhook      [5] configure + start  [q] quit"
 say "  Choose: "; read -r opt
 case "$opt" in
     1) pick_ifaces;;
@@ -214,10 +280,14 @@ case "$opt" in
     4) webhook_configure;;
     5) ifaces=$(conf_get IFACES)
        if [ -n "$ifaces" ]; then
-           say "  Enabling + starting per-interface server(s) ..."
-           for i in $ifaces; do
-               enable_at_boot "pppoe-server@$i.service"
-           done
+           say "  Configuring PPPoE server (package install + config files) ..."
+           install_packages
+           write_server_options
+           write_ip_pool
+           ensure_chap
+           say ""
+           say "  Writing + enabling per-interface server(s) ..."
+           reload_unit
        else
            say '  select interfaces first (option 1).'
        fi;;
