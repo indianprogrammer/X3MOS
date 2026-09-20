@@ -20,3 +20,4 @@ build.log*
 # installer offline-disk build cache and stray logs
 .installer-build/
 nographic.log
+wget-log*

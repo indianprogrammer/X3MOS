@@ -4,12 +4,15 @@
 #   xinstall
 #
 # Options:
-#   1) Docker Engine on Debian    (https://docs.docker.com/engine/install/debian/)
-#   2) Ookla Speedtest Server     (https://srijit.com/ookla-speedtest-server-installation-guide/)
-#   3) CGNAT (Jool)               (reference: cgnat.sh)
+#   1) NetworkManager / nmcli  (ensure installed/enabled, show device status)
+#   2) Docker Engine on Debian (https://docs.docker.com/engine/install/debian/)
+#   3) Ookla Speedtest Server  (https://srijit.com/ookla-speedtest-server-installation-guide/)
+#   4) ISP CGNAT               (reference: cgnat.md - nftables NAT44 + NATLOG)
+#   5) BGP Router (FRRouting)  (frr + frr-pythontools, opens vtysh)
 #
 # Invoked by the normal (x3m) user. The menu re-executes itself under sudo
-# because every option performs a system-wide installation.
+# because every option performs a system-wide installation (nmcli manages the
+# NetworkManager service and needs root as well).
 
 LIB=/usr/local/lib/xinstall
 [ -r "$LIB/lib.sh" ] && . "$LIB/lib.sh" || exit 1
@@ -18,6 +21,14 @@ require_root
 
 BOLD=$([ -t 1 ] && tput bold 2>/dev/null || true)
 NORM=$([ -t 1 ] && tput sgr0 2>/dev/null || true)
+
+nmcli_status() {
+    if command -v nmcli >/dev/null 2>&1 && systemctl is-active NetworkManager >/dev/null 2>&1; then
+        printf 'installed'
+    else
+        printf 'not installed'
+    fi
+}
 
 docker_status() {
     if command -v docker >/dev/null 2>&1; then
@@ -36,7 +47,16 @@ speedtest_status() {
 }
 
 cgnat_status() {
-    if [ -f /usr/local/bin/init-cgnat.sh ] && command -v jool >/dev/null 2>&1; then
+    if command -v nft >/dev/null 2>&1 && nft list tables ip 2>/dev/null | grep -q cgnat; then
+        printf 'installed'
+    else
+        printf 'not installed'
+    fi
+}
+
+bgp_status() {
+    if command -v vtysh >/dev/null 2>&1 \
+        && [ -f /etc/frr/daemons ] && grep -q '^bgpd=yes' /etc/frr/daemons; then
         printf 'installed'
     else
         printf 'not installed'
@@ -51,34 +71,30 @@ while :; do
         "${BOLD}              X3M-OS install menu${NORM}" \
         "${BOLD}========================================================${NORM}" \
         '' \
-        "  [1] Install Docker Engine          (status: $(docker_status))" \
-        "      Adds Docker's official apt repository, installs docker-ce," \
-        "      containerd.io and the compose/buildx plugins, enables the" \
-        "      service and adds your user to the 'docker' group." \
-        "      Guide: https://docs.docker.com/engine/install/debian/" \
+        "  [1] Install NetworkManager (nmcli,nmtui)  (status: $(nmcli_status))" \
+        "      nmcli commands for managing wifi/ethernet connections." \
         '' \
-        "  [2] Install Ookla Speedtest Server (status: $(speedtest_status))" \
-        "      Downloads and runs the official ooklaserver.sh, installs the" \
-        "      daemon under /opt/ooklaserver and registers a systemd unit" \
-        "      so it auto-starts at boot (listens on TCP 8080)." \
+        "  [2] Install Docker Engine          (status: $(docker_status))" \
+        '' \
+        "  [3] Install Ookla Speedtest Server (status: $(speedtest_status))" \
         "      Guide: https://srijit.com/ookla-speedtest-server-installation-guide/" \
         '' \
-        "  [3] Install CGNAT (Jool)           (status: $(cgnat_status))" \
-        "      Carrier-Grade NAT: installs jool-dkms/jool-tools, enables IPv4" \
-        "      forwarding and configures NAT44 over the private RFC 6598 pool" \
-        "      100.64.0.0/10 (asks for the public IP pool, ports 1024-65535)." \
-        "      Reference: cgnat.sh" \
+        "  [4] Install ISP CGNAT              (status: $(cgnat_status))" \
         '' \
-        '  [4] Quit' \
+        "  [5] Install BGP Router (FRR)     (status: $(bgp_status))" \
+        '' \
+        '  [6] Quit' \
         ''
 
-    printf 'Choose an option [1-4]: '
+    printf 'Choose an option [1-6]: '
     read -r choice
     case "$choice" in
-        1) "$LIB/install-docker.sh";;
-        2) "$LIB/install-speedtest.sh";;
-        3) "$LIB/install-cgnat.sh";;
-        4) exit 0;;
+        1) "$LIB/install-nmcli.sh";;
+        2) "$LIB/install-docker.sh";;
+        3) "$LIB/install-speedtest.sh";;
+        4) "$LIB/install-cgnat.sh";;
+        5) "$LIB/install-bgp.sh";;
+        6) exit 0;;
         *) continue;;
     esac
     printf '\nPress ENTER to return to the menu...'

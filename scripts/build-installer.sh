@@ -223,12 +223,20 @@ fi
 # A pool cached before the busybox/zstd/helper fixes (or from an older mirror
 # snapshot) may be missing packages base-installer needs; and a run interrupted
 # mid-download can leave truncated .debs that pass an empty-size check. Only
-# reuse a pool that is intact: markers present AND every .deb is a valid
-# ar archive (dpkg-deb -c). Otherwise flush it and re-resolve.
+# reuse a pool that is intact: base-installer markers present, the pool was
+# produced by the CURRENT closure manifest (stamped after each re-resolve), and
+# every .deb is a valid ar archive (dpkg-deb -c). Otherwise flush and
+# re-resolve. Bump POOL_MANIFEST whenever the URIS/preseed closure set changes
+# (add or remove packages): without it a cached pool from a previous manifest
+# would be reused, and the preseed's apt-get install would then fail on a
+# missing/leftover package - taking sudo/ssh with it. The base markers also
+# protect against pre-manifest (base-only) or truncated pools.
+POOL_MANIFEST=3
 POOL_OK=0
 if ls "$POOL"/*.deb >/dev/null 2>&1 && ls "$POOL"/busybox_*.deb >/dev/null 2>&1 \
     && ls "$POOL"/zstd_*.deb >/dev/null 2>&1 \
     && ls "$POOL"/libext2fs2t64_*.deb >/dev/null 2>&1 \
+    && ls "$POOL"/.manifest-$POOL_MANIFEST >/dev/null 2>&1 \
     && [[ "$FORCE" -eq 0 ]]; then
     log "validating cached pool (dpkg-deb -c each)..."
     BAD="$(for f in "$POOL"/*.deb; do
@@ -263,26 +271,25 @@ else
     # compression for initramfs-tools) before the kernel; without their .deb in
     # the pool the installer dies at "Unable to install <pkg>".
     log "collecting URIs (kernel/grub closure)..."
-    # Network tooling + resolvers: bring all interfaces up with DHCP on the
-    # installed system (systemd-networkd), provide DNS resolution
-    # (systemd-resolved) and the usual utilities (ping/nslookup/dig/host,
-    # dhclient/dhcpcd, ifconfig/netstat/route, traceroute, curl/wget,
-    # ethtool/tcpdump/nc, ssh/scp). These are installed into the target via
-    # pkgsel/include (--no-install-recommends, see pkgsel patch below) so the
-    # plain closure here is exactly what the target needs.
-    URIS=$(sudo chroot "$STAGE" apt-get install --print-uris --no-install-recommends \
+    # Network tooling: NetworkManager owns networking on the installed system
+# (all interfaces up with DHCP, nmcli front-end), plus the lean admin set
+# (ping, curl/wget, ethtool, ssh/scp, timesyncd). ONLY packages that the
+# preseed late-command installs belong in this pool: everything the xinstall
+# menu installs afterwards (docker, speedtest, frr BGP, cgnat: nftables/
+# ulogd2/rsyslog) comes from the live apt sources at run time, so it is NOT
+# baked into the ISO pool.
+URIS=$(sudo chroot "$STAGE" apt-get install --print-uris --no-install-recommends \
         -y linux-image-amd64 grub-pc ifupdown iproute2 kmod busybox zstd \
         console-setup keyboard-configuration sudo \
-        iputils-ping bind9-dnsutils isc-dhcp-client dhcpcd-base net-tools \
-        ca-certificates \
-        curl wget traceroute ethtool tcpdump netcat-openbsd mtr-tiny htop openssh-client \
+        iputils-ping ca-certificates network-manager \
+        curl wget ethtool openssh-client \
         openssh-server systemd-timesyncd \
         2>/dev/null | grep -oE "'http[s]?://[^']+\.deb'" | tr -d "'" || true)
 
     # Also collect the base packages already installed in the stage.
     NEW=""
     STAGE_NAMES=$(sudo chroot "$STAGE" dpkg-query -W -f='${Package}\n' 2>/dev/null \
-        | grep -v '^$' || true)
+        | grep -v '^$' | grep -vE '^(vim-tiny|vim-common|dhcpcd-base)$' || true)
     [[ -n "$STAGE_NAMES" ]] && \
         NEW=$(sudo chroot "$STAGE" apt-get download --print-uris $STAGE_NAMES \
             2>/dev/null | grep -oE 'http[s]?://[^ "]+\.deb' || true)
@@ -294,9 +301,13 @@ $NEW"
     # minbase set that it computes against the on-CD index) + busybox. Collect
     # those too so the pool never falls short of what base-installer requests.
     log "collecting URIs (required/important set)..."
+    # Deliberately EXCLUDED from the required/important base set (lean box:
+    # editors + dhcp are not wanted; NM does DHCP internally): vim-tiny,
+    # vim-common and dhcpcd-base. Dropping their .deb from the pool keeps them
+    # out of the CD index too, so base-installer never asks for them.
     BASE_SET=$(sudo chroot "$STAGE" sh -c \
         'apt-cache dumpavail 2>/dev/null \
-            | awk "/^Package:/{p=\$2} /^Priority: (required|important)/{print p}"' \
+            | awk "/^Package:/{p=\$2} /^Priority: (required|important)/{if(p!=\"vim-tiny\" && p!=\"vim-common\" && p!=\"dhcpcd-base\") print p}"' \
         2>/dev/null | sort -u)
     NEW=$(sudo chroot "$STAGE" apt-get download --print-uris $BASE_SET busybox zstd \
         2>/dev/null | grep -oE 'http[s]?://[^ "]+\.deb' || true)
@@ -333,7 +344,8 @@ def bare(a):
     return a.split()[0].split(":")[0]
 
 done = set(p for p, x in pk.items()
-           if x.get("Priority") in ("required", "important"))
+           if x.get("Priority") in ("required", "important")
+           and p not in ("vim-tiny", "vim-common", "dhcpcd-base"))
 
 def satisfied(alts):
     return any(bare(a) in done for a in alts)
@@ -400,6 +412,56 @@ $NEW"
     done <<< "$URIS"
     [[ "$fails" -eq 0 ]] || die "pool download incomplete ($fails failures)"
     ok "pool: $(ls "$POOL"/*.deb 2>/dev/null | wc -l) debs ($(du -sh "$POOL" | cut -f1))"
+    touch "$POOL/.manifest-$POOL_MANIFEST"
+    log "pool manifest stamped: .manifest-$POOL_MANIFEST (bump POOL_MANIFEST to force a re-resolve)"
+fi
+
+# --- trim GPU/DRM + audio modules out of the pool kernel ------------------
+# The installed box is a headless serial-console appliance: the DRM (amdgpu,
+# i915, radeon, nouveau, vboxvideo...) and sound (snd-*) modules are dead
+# weight (~18 MB unpacked / ~9 MB in the 103 MB kernel .deb). Trimming the
+# .deb here shrinks BOTH the ISO and every freshly installed system.
+# The kernel is unpacked, the module directories deleted, the module index
+# (modules.dep, modules.alias, ...) is regenerated with depmod inside the
+# debootstrap stage, and the .deb is rebuilt and swapped back into the pool.
+# A per-deb marker file prevents re-trimming a pool that was already trimmed.
+# Any failure keeps the ORIGINAL kernel .deb untouched.
+TRIMKER=$(ls "$POOL"/linux-image-6.*_amd64.deb 2>/dev/null | head -1)
+if [[ -n "$TRIMKER" && ! -f "$POOL/.kernel-trimmed-$POOL_MANIFEST-$(basename "$TRIMKER")" ]]; then
+    log "trimming GPU/DRM + sound modules from $(basename "$TRIMKER")..."
+    KMOD_ROOT="$STAGE/kmod-trim"
+    rm -rf "$KMOD_ROOT"
+    mkdir -p "$KMOD_ROOT"
+    dpkg-deb -x "$TRIMKER" "$KMOD_ROOT" || die "kernel unpack failed"
+    dpkg-deb -e "$TRIMKER" "$KMOD_ROOT/DEBIAN" >/dev/null || die "kernel control extract failed"
+    removed=0
+    for d in "$KMOD_ROOT"/usr/lib/modules/*/kernel/drivers/gpu \
+        "$KMOD_ROOT"/usr/lib/modules/*/kernel/sound; do
+        if [[ -d "$d" ]]; then
+            log "  removing: ${d#$WORK_DIR/}"
+            rm -rf "$d"
+            removed=1
+        fi
+    done
+    if [[ "$removed" -eq 1 ]]; then
+        KVER="$(basename "$KMOD_ROOT"/usr/lib/modules/*)"
+        sudo chroot "$STAGE" sh -c 'command -v depmod >/dev/null 2>&1 || apt-get install -y --no-install-recommends kmod' \
+            >/dev/null 2>&1 || true
+        if sudo chroot "$STAGE" depmod -b /kmod-trim/usr "$KVER" >/dev/null 2>&1; then
+            log "  depmod: module indexes regenerated for $KVER"
+            if dpkg-deb --build "$KMOD_ROOT" "$TRIMKER.trimmed" >/dev/null 2>&1; then
+                mv -f "$TRIMKER.trimmed" "$TRIMKER"
+                touch "$POOL/.kernel-trimmed-$POOL_MANIFEST-$(basename "$TRIMKER")"
+                log "  kernel .deb rebuilt: $(basename "$TRIMKER") ($(du -h "$TRIMKER" | cut -f1))"
+            else
+                rm -f "$TRIMKER.trimmed"
+                warn "kernel rebuild failed - keeping the original kernel .deb"
+            fi
+        else
+            warn "depmod failed - keeping the original kernel .deb (GPU/sound not trimmed)"
+        fi
+    fi
+    rm -rf "$KMOD_ROOT"
 fi
 
 # --- installer udeb pool ---

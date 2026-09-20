@@ -1,0 +1,7 @@
+# Passwordless sudo for the xinstall installer menu (default on fresh
+# installs). The menu re-executes itself under sudo (require_root), so
+# members of the 'sudo' group get NOPASSWD for exactly these paths - not a
+# blanket passwordless sudo. Installer scripts invoked from the menu already
+# run as root, so only the menu entry point needs the rule.
+# Mode 0440 root-owned is enforced at install time by the preseed late_command.
+%sudo ALL=(ALL) NOPASSWD: /usr/local/bin/xinstall, /usr/local/lib/xinstall/*

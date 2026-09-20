@@ -34,18 +34,33 @@ It is tested in VirtualBox (VGA and serial console).
   `sudo`, `sudo reboot`, `sudo halt`, `sudo poweroff` work for the non-root
   account (root login is also enabled).
 - **`xinstall` install menu**: running `xinstall` on the installed system
-  opens an interactive menu that installs **Docker Engine** (Docker's apt
-  repository method, per `docs.docker.com`), an **Ookla Speedtest Server**
-  (official `ooklaserver.sh` into `/opt/ooklaserver` with a systemd auto-start
-  unit, per Srijit Banerjee's guide) or a **CGNAT (Jool)** carrier-grade NAT
-  (per `cgnat.sh`). Runs as the normal user; elevates via sudo automatically.
+  opens an interactive menu with **NetworkManager / nmcli** (installed/enabled
+  on fresh installs; shows device status + usage hint), **Docker Engine**
+  (Docker's apt repository method, per `docs.docker.com`), an **Ookla Speedtest
+  Server** (official `ooklaserver.sh` into `/opt/ooklaserver` with a systemd
+  auto-start unit, per Srijit Banerjee's guide), or an **ISP CGNAT** (nftables
+  NAT44 + ulogd2/rsyslog NAT logging per `cgnat.md`, asking for the public IP
+  pool, private IP pool and NATLOG server at install time), or a **BGP
+  Router** (FRRouting `frr` with the zebra/bgpd daemons enabled, dropping into
+  `vtysh`). Runs as the normal user; elevates via sudo automatically. The menu
+  **auto-starts at interactive console login** for `root`/`x3m` (skipped over
+  SSH): disable per session with `XINSTALL_SKIP=1` or permanently with
+  `touch /etc/xinstall-no-autorun`.
+- **Passwordless sudo for xinstall**: the overlay ships a sudoers drop-in
+  (`/etc/sudoers.d/xinstall`, mode 0440) granting the `sudo` group NOPASSWD
+  for exactly `/usr/local/bin/xinstall` and `/usr/local/lib/xinstall/*` — the
+  menu never prompts for a password, but nothing else gains passwordless
+  sudo.
 - **Dual console**: kernel and GRUB are configured for `tty0` (VGA) **and**
   `ttyS0` (serial, 115200 8N1); `serial-getty@ttyS0` is enabled so a headless
   install is observable and usable over a serial cable.
-- **All interfaces up with DHCP on boot**: a `dhclient-all.service` (oneshot,
-  provided by the `chroot/` overlay) runs `dhclient` on every interface at
-  boot; the lease's nameservers are written straight into `/etc/resolv.conf`
-  (no `systemd-resolved`, so nothing steals DNS).
+- **NetworkManager owns networking**: `network-manager` is preinstalled
+  (preseed + offline pool) and its `NetworkManager` service brings every
+  interface up with DHCP at boot and handles `wifi`/ethernet connections;
+  `nmcli` is the front-end. `/etc/resolv.conf` is managed by NetworkManager
+  (no `systemd-resolved`, so nothing steals DNS). The old
+  `dhclient-all.service` was dropped from the `chroot/` overlay so no second
+  DHCP client races NetworkManager.
 - **Login banner**: the console login prompt shows an `X3M-OS` ASCII-art
   banner from `/etc/issue` (via getty).
 - **Target overlay (`chroot/`)**: any file placed under `chroot/` is copied
@@ -176,12 +191,21 @@ drives the unattended path. Every question is either preseeded or marked
 - **Login banner**: `/etc/issue` shows an `X3M-OS` ASCII-art banner at the
   login prompt (MOTD is disabled: `/etc/motd` is empty and
   `/etc/update-motd.d/10-uname` is a no-op).
-- **Network**: `dhclient-all.service` brings **all** interfaces up with DHCP
-  at boot (runs `/usr/sbin/dhclient`; `/etc/resolv.conf` is a plain file that
-  dhclient fills with the DHCP nameservers — `systemd-resolved` is not used).
+- **Network**: `NetworkManager` (preinstalled) owns networking — it brings
+  **all** interfaces up with DHCP at boot and manages wifi/ethernet
+  connections with `nmcli`; `/etc/resolv.conf` is a plain file that
+  NetworkManager fills with the connection's nameservers (`systemd-resolved`
+  is not used). The old `dhclient-all.service` overlay was removed.
 - **SSH**: `openssh-server` installed and enabled (`ssh.service`); the root
   login drop-in (`chroot/etc/ssh/sshd_config.d/10-rootlogin.conf`) allows
   `PermitRootLogin yes` to match the root-only login design.
+- **Kernel is trimmed of GPU/DRM + sound modules**: `build-installer.sh` unpacks
+  the pool `linux-image-*` deb, deletes the `drivers/gpu` and `kernel/sound`
+  module trees, regenerates the module index (`depmod`) and rebuilds the deb
+  (~9 MB saved from the 103 MB kernel). Intended for headless serial-console
+  boxes; the boot-time framebuffer console (efifb) is unaffected. Re-run a
+  build to trim, or delete `pool/.kernel-trimmed-*` + build to re-trim after a
+  kernel update.
 - **apt**: offline stub sources by default (`# OFFLINE …` in
   `/etc/apt/sources.list`); override with `chroot/etc/apt/sources.list`
   (the overlay is applied last and therefore wins).
@@ -202,29 +226,43 @@ $ xinstall
               X3M-OS install menu
 ========================================================
 
-  [1] Install Docker Engine          (status: not installed)
+  [1] Install NetworkManager (nmcli)  (status: installed)
+      Ensures NetworkManager is installed and enabled (preinstalled on
+      fresh X3M-OS installs), then shows device status and the main
+      nmcli commands for managing wifi/ethernet connections.
+
+  [2] Install Docker Engine          (status: not installed)
       Adds Docker's official apt repository, installs docker-ce,
       containerd.io and the compose/buildx plugins, enables the
       service and adds your user to the 'docker' group.
       Guide: https://docs.docker.com/engine/install/debian/
 
-  [2] Install Ookla Speedtest Server (status: not installed)
+  [3] Install Ookla Speedtest Server (status: not installed)
       Downloads and runs the official ooklaserver.sh, installs the
       daemon under /opt/ooklaserver and registers a systemd unit
       so it auto-starts at boot (listens on TCP 8080).
       Guide: https://srijit.com/ookla-speedtest-server-installation-guide/
 
-  [3] Install CGNAT (Jool)           (status: not installed)
-      Carrier-Grade NAT: installs jool-dkms/jool-tools, enables IPv4
-      forwarding and configures NAT44 over the private RFC 6598 pool
-      100.64.0.0/10 (asks for the public IP pool, ports 1024-65535).
-      Reference: cgnat.sh
+  [4] Install ISP CGNAT              (status: not installed)
+      Asks for the public IP pool, private IP pool and NATLOG server,
+      then installs nftables NAT44 + ulogd2/rsyslog logging with
+      conntrack tuning and fq_codel QoS (see cgnat.md).
 
-  [4] Quit
+  [5] Install BGP Router (FRR)     (status: not installed)
+      Installs frr, enables the zebra and bgpd daemons, starts
+      frr.service and opens vtysh so BGP neighbors and advertised
+      networks can be configured interactively.
+
+  [6] Quit
 ```
 
 - Runs as the normal user (`x3m`) and re-executes itself under sudo for the
   install steps (every option is a system-wide installation).
+- **NetworkManager / nmcli** is preinstalled on fresh installs (added to the
+  preseed late-command package list and to the offline pool closure in
+  `scripts/build-installer.sh`). The menu option (re)installs it if missing,
+  enables the `NetworkManager` service and prints `nmcli device status` plus a
+  usage hint (wifi scan/connect, connection bring-up, `nmcli device status`).
 - **Docker** follows the "Install using the apt repository" method: removes
   conflicting packages, adds the GPG key + `docker.sources`, installs
   `docker-ce docker-ce-cli containerd.io docker-buildx-plugin
@@ -235,15 +273,41 @@ $ xinstall
   `OoklaServer.properties` settings, and registers a `systemd` unit
   (`ooklaserver.service`, the native replacement for the guide's rc.local
   method) so the daemon starts at boot and listens on TCP 8080.
-- **CGNAT** follows `cgnat.sh`: installs `jool-dkms` + `jool-tools`, enables
-  IPv4 forwarding, writes `/etc/jool/jool.conf` (private pool
-  `100.64.0.0/10`) and an `init-cgnat.sh` that registers a stateful NAT44
-  Jool instance over **your** public IP pool (asked interactively) with the
-  default source port range `1024-65535`, run via the `cgnat.service` oneshot.
+- **BGP** installs FRRouting (`frr` from the live Debian sources — it is
+  intentionally NOT part of the preseed/ISO pool, and `frr-pythontools` is
+  deliberately excluded because it drags in the whole python3 runtime for vtysh
+  tab-completion), enables the `zebra` and `bgpd` daemons in
+  `/etc/frr/daemons`, starts `frr.service` and opens `vtysh` for interactive
+  BGP configuration (`router bgp <asn>`, `neighbor <ip> remote-as <asn>`,
+  advertised networks).
+- **CGNAT** follows `cgnat.md` (repo root): at install time it asks for the
+  **public IP pool** (CIDR, IP range or single IP), the **private IP pool**
+  (the subscribers' source subnet, e.g. `100.64.0.0/10`) and the **NATLOG
+  server** (remote syslog receiver `ip[:port]`, UDP). It installs
+  `nftables ulogd2 rsyslog iproute2 procps`, applies the conntrack/socket
+  tuning from `/etc/sysctl.d/99-isp-cgnat.conf`, installs a `cgnat-qos`
+  fq_codel service on every interface, binds the public subnet to the WAN
+  interface, programs a full-cone `snat to <range> persistent,fully-random`
+  ruleset with a hairpinning rule, and streams one line per new NAT allocation
+  to the NATLOG server. A CIDR public pool is expanded to the FULL allocated
+  subnet, network through broadcast, with no reserved addresses (e.g.
+  `103.69.44.0/25` → `103.69.44.0-103.69.44.127`). Logging uses the reference's
+  ulogd2 but wired as an **NFLOG** consumer (packet input) rather than the
+  NFCT flow-input that `cgnat.md` specifies: the nftables `log group 1`
+  statement hands each new mapping to ulogd2 asynchronously via nfnetlink
+  (no per-packet kernel `printk` under load), ulogd2's NFLOG→SYSLOG stack
+  (functioning `ulogd_inppkt_NFLOG`, `BASE`, `IFINDEX`, `IP2STR`, `PRINTPKT`,
+  `SYSLOG` plugins) emits it on facility `local6`, and rsyslog `omfwd`s the
+  `CGNAT_ALLOC: ` lines to the NATLOG server over UDP. The NFCT→SYSLOG stack
+  of the reference is not runnable on ulogd2 2.0.x (its SYSLOG/PRINTPKT
+  output needs `oob.*` keys only the packet-NFLOG input provides); the
+  hairpinning rule also lives in postrouting because nftables only allows
+  `masquerade` there.
 - The pieces live in `chroot/usr/local/bin/xinstall` (menu) and
-  `chroot/usr/local/lib/xinstall/` (`lib.sh`, `install-docker.sh`,
-  `install-speedtest.sh`, `install-cgnat.sh`); they are applied via the
-  `chroot/` overlay, so rebuild the ISO after changing them.
+  `chroot/usr/local/lib/xinstall/` (`lib.sh`, `install-nmcli.sh`,
+  `install-docker.sh`, `install-speedtest.sh`, `install-cgnat.sh`,
+  `install-bgp.sh`); they are applied via the `chroot/` overlay, so rebuild
+  the ISO after changing them.
 
 ---
 
