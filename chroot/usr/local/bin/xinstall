@@ -94,17 +94,23 @@ options_text() {
         "  [2] Manage VLAN interfaces      .....  ($(vlan_status))" \
         "      802.1Q tagged links via nmcli" \
         '' \
-        "  [3] Install Docker Engine       .....  ($(docker_status))" \
-        "      containers on Debian 12/13" \
+        "  [3] Install BGP Router (FRR)    .....  ($(bgp_status))" \
+        "      frr + frr-pythontools" \
         '' \
-        "  [4] Install Ookla Speedtest     .....  ($(speedtest_status))" \
-        "      guides: srijit.com + ooklaserver" \
-        '' \
-        "  [5] Install ISP CGNAT (NAT44)   .....  ($(cgnat_status))" \
+        "  [4] Install ISP CGNAT (NAT44)   .....  ($(cgnat_status))" \
         "      nftables nsrc + NATLOG" \
         '' \
-        "  [6] Install BGP Router (FRR)    .....  ($(bgp_status))" \
-        "      frr + frr-pythontools" \
+        "  [5] Install PPPoE server        .....  ($(pppoe_status))" \
+        "      broadband access server on one or more interfaces" \
+        '' \
+        "  [6] Install IPoE server         .....  ($(ipoe_status))" \
+        "      broadcast-IP-over-Ethernet access" \
+        '' \
+        "  [7] Install Docker Engine       .....  ($(docker_status))" \
+        "      containers on Debian 12/13" \
+        '' \
+        "  [8] Install Ookla Speedtest     .....  ($(speedtest_status))" \
+        "      guides: srijit.com + ooklaserver" \
         '' \
         "  [7] Install PPPoE server        .....  ($(pppoe_status))" \
         "      broadband access server on one or more interfaces" \
@@ -167,12 +173,12 @@ while :; do
         p|P) page=$((page - 1)); [ "$page" -lt 1 ] && page=1; continue;;
         1) "$LIB/install-nmcli.sh";;
         2) "$LIB/install-vlan.sh";;
-        3) "$LIB/install-docker.sh";;
-        4) "$LIB/install-speedtest.sh";;
-        5) "$LIB/install-cgnat.sh";;
-        6) "$LIB/install-bgp.sh";;
-        7) "$LIB/install-pppoe.sh";;
-        8) "$LIB/install-ipoe.sh";;
+        3) "$LIB/install-bgp.sh";;
+        4) "$LIB/install-cgnat.sh";;
+        5) "$LIB/install-pppoe.sh";;
+        6) "$LIB/install-ipoe.sh";;
+        7) "$LIB/install-docker.sh";;
+        8) "$LIB/install-speedtest.sh";;
         9) clear; exit 0;;
         *) continue;;
     esac
