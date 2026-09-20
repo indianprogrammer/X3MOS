@@ -105,6 +105,12 @@ options_text() {
         '' \
         "  [6] Install BGP Router (FRR)    .....  ($(bgp_status))" \
         "      frr + frr-pythontools" \
+        '' \
+        "  [7] Install PPPoE server        .....  ($(pppoe_status))" \
+        "      broadband access server on one or more interfaces" \
+        '' \
+        "  [8] Install IPoE server         .....  ($(ipoe_status))" \
+        "      broadcast-IP-over-Ethernet access" \
         ''
 }
 
@@ -165,7 +171,9 @@ while :; do
         4) "$LIB/install-speedtest.sh";;
         5) "$LIB/install-cgnat.sh";;
         6) "$LIB/install-bgp.sh";;
-        7) clear; exit 0;;
+        7) "$LIB/install-pppoe.sh";;
+        8) "$LIB/install-ipoe.sh";;
+        9) clear; exit 0;;
         *) continue;;
     esac
     printf '\n  Press ENTER to return to the menu...'
