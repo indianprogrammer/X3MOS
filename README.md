@@ -50,7 +50,9 @@ It is tested in VirtualBox (VGA and serial console).
   (`/etc/sudoers.d/xinstall`, mode 0440) granting the `sudo` group NOPASSWD
   for exactly `/usr/local/bin/xinstall` and `/usr/local/lib/xinstall/*` — the
   menu never prompts for a password, but nothing else gains passwordless
-  sudo.
+  sudo. Because `cp -a` copies the overlay preserving the build host's uid,
+  the preseed explicitly `chown root:root`'s `/etc/sudoers.d` on the target —
+  otherwise sudo refuses to read a drop-in dir owned by a non-root user.
 - **Dual console**: kernel and GRUB are configured for `tty0` (VGA) **and**
   `ttyS0` (serial, 115200 8N1); `serial-getty@ttyS0` is enabled so a headless
   install is observable and usable over a serial cable.
@@ -121,7 +123,7 @@ produced by one script.
 sudo ./scripts/build-installer.sh
 ```
 
-Output: `debian-trixie-netinst-amd64.iso` (approx. 365 MB) plus
+Output: `debian-trixie-netinst-amd64.iso` (approx. 370 MB) plus
 `.installer-build/` (cached stage, deb pool, udeb pool, ISO staging) for fast
 incremental rebuilds.
 
@@ -142,8 +144,10 @@ The build:
    preserving the official layout (so `anna`/`cdrom-retriever` can fetch them).
 4. Patches `apt-cdrom-setup` for VirtualBox, signs the CD `Release` and
    embeds the keyring + post-base-installer hook.
-5. Stamps the `preseed.cfg` into the initrd/filesystem and assembles the ISO
-   with `xorriso` in the official d-i CD layout.
+5. Stamps the fresh `preseed.cfg` into the initrd (`/preseed.cfg`,
+   `/etc/preseed.cfg`, `/cdrom/preseed.cfg`) and at the ISO root
+   (`/preseed.cfg`), then assembles the ISO with `xorriso` in the official d-i
+   CD layout.
 
 ### Verify an existing build
 
@@ -226,10 +230,10 @@ $ xinstall
               X3M-OS install menu
 ========================================================
 
-  [1] Install NetworkManager (nmcli)  (status: installed)
+  [1] Install NetworkManager (nmcli,nmtui)  (status: installed)
       Ensures NetworkManager is installed and enabled (preinstalled on
       fresh X3M-OS installs), then shows device status and the main
-      nmcli commands for managing wifi/ethernet connections.
+      nmcli/nmtui commands for managing wifi/ethernet connections.
 
   [2] Install Docker Engine          (status: not installed)
       Adds Docker's official apt repository, installs docker-ce,
@@ -262,7 +266,7 @@ $ xinstall
   preseed late-command package list and to the offline pool closure in
   `scripts/build-installer.sh`). The menu option (re)installs it if missing,
   enables the `NetworkManager` service and prints `nmcli device status` plus a
-  usage hint (wifi scan/connect, connection bring-up, `nmcli device status`).
+  usage hint (wifi scan/connect, connection bring-up, `nmcli`/`nmtui`).
 - **Docker** follows the "Install using the apt repository" method: removes
   conflicting packages, adds the GPG key + `docker.sources`, installs
   `docker-ce docker-ce-cli containerd.io docker-buildx-plugin
@@ -298,7 +302,10 @@ $ xinstall
   (no per-packet kernel `printk` under load), ulogd2's NFLOG→SYSLOG stack
   (functioning `ulogd_inppkt_NFLOG`, `BASE`, `IFINDEX`, `IP2STR`, `PRINTPKT`,
   `SYSLOG` plugins) emits it on facility `local6`, and rsyslog `omfwd`s the
-  `CGNAT_ALLOC: ` lines to the NATLOG server over UDP. The NFCT→SYSLOG stack
+  `CGNAT_ALLOC: ` lines to the NATLOG server over UDP. The overlay's
+  `chroot/etc/tmpfiles.d/ulogd.conf` creates a boot-time `/run/ulog`
+  (`0755 ulog:ulog`) so ulogd2 can bind its NFLOG socket before its service
+  starts. The NFCT→SYSLOG stack
   of the reference is not runnable on ulogd2 2.0.x (its SYSLOG/PRINTPKT
   output needs `oob.*` keys only the packet-NFLOG input provides); the
   hairpinning rule also lives in postrouting because nftables only allows
