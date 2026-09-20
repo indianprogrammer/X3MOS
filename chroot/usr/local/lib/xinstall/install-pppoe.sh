@@ -27,6 +27,9 @@ CFG_DIR=$(conf_dir)/pppoe
 mkdir -p "$CFG_DIR"
 CFG="$CFG_DIR/server.conf"
 
+conf_get() { awk -F= -v k="$1" '$1==k{print $2; exit}' "$CFG"; }
+conf_set() { sed -i -E "s|^($1)=.*|\1=$2|" "$CFG"; }
+
 # Ensure the persisted config always has every key (first run only).
 ensure_conf() {
     [ -f "$CFG" ] || conf_write
@@ -180,7 +183,10 @@ RestartSec=3
 WantedBy=multi-user.target
 XEOF
     say ""
-    manage_ifaces enable_at_boot "$set"
+    [ -n "$ifaces" ] || return
+    for i in $ifaces; do
+        enable_at_boot "pppoe-server@$i.service"
+    done
 }
 
 # (per-interface loop lives in pppoe-common.sh so the unit is tiny)
