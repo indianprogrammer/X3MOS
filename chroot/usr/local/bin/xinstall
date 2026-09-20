@@ -111,12 +111,6 @@ options_text() {
         '' \
         "  [8] Install Ookla Speedtest     .....  ($(speedtest_status))" \
         "      guides: srijit.com + ooklaserver" \
-        '' \
-        "  [7] Install PPPoE server        .....  ($(pppoe_status))" \
-        "      broadband access server on one or more interfaces" \
-        '' \
-        "  [8] Install IPoE server         .....  ($(ipoe_status))" \
-        "      broadcast-IP-over-Ethernet access" \
         ''
 }
 

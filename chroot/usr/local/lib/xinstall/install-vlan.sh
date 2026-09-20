@@ -148,6 +148,7 @@ cmd_add_vlan() {
     else
         nmcli connection modify "$con" ipv4.method auto || true
     fi
+    nmcli connection modify "$con" ipv4.may-fail no ipv6.may-fail no >/dev/null 2>&1 || true
     nmcli connection up "$con" >/dev/null 2>&1 \
         || say "    WARNING: created but could not activate - check 'nmcli connection up $con'"
 
@@ -180,7 +181,7 @@ cmd_delete_vlan() {
             *)
                 if [ "$pick" -ge 1 ] 2>/dev/null && [ "$pick" -lt "$i" ] 2>/dev/null; then
                     nmcli connection delete "$(nth "$pick" "$@")" \
-                        && say "    deleted $(vlan_nth "$pick")."
+                        && say "    deleted $(nth "$pick")."
                     return 0
                 fi
                 say "    invalid choice"
@@ -199,13 +200,15 @@ cmd_show_vlan() {
     fi
     printf '    %-16s %-12s %-5s %-10s %s\n' NAME DEVICE ID PARENT ADDRESS
     for c in "$@"; do
-        dev=$(nmcli -g connection.interface-name connection show "$c" 2>/dev/null | grep -v '^$' | head -1)
+        dev=$(nmcli -g connection.interface-name connection show "$c" 2>/dev/null | grep -v '^$' | head -1) || true
         [ -z "$dev" ] && dev="-"
-        vid=$(nmcli -g vlan.id connection show "$c" 2>/dev/null | grep -v '^$' | head -1)
-        parent=$(nmcli -g vlan.parent connection show "$c" 2>/dev/null | grep -v '^$' | head -1)
-        addr=$(nmcli -g IP4.ADDRESS connection show "$c" 2>/dev/null | grep -v '^$' | tr '\n' ' ' | sed 's/ $//')
+        vid=$(nmcli -g vlan.id connection show "$c" 2>/dev/null | grep -v '^$' | head -1) || true
+        [ -z "$vid" ] && vid="?"
+        parent=$(nmcli -g vlan.parent connection show "$c" 2>/dev/null | grep -v '^$' | head -1) || true
+        [ -z "$parent" ] && parent="-"
+        addr=$(nmcli -g IP4.ADDRESS connection show "$c" 2>/dev/null | grep -v '^$' | tr '\n' ' ' | sed 's/ $//') || true
         [ -z "$addr" ] && addr="(down)"
-        printf '    %-16s %-12s %-5s %-10s %s\n' "$c" "$dev" "${vid:-?}" "${parent:-?}" "$addr"
+        printf '    %-16s %-12s %-5s %-10s %s\n' "$c" "$dev" "$vid" "$parent" "$addr"
     done
     say ""
     say "    create/delete via this menu; bring one up with:"

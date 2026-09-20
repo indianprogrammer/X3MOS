@@ -24,7 +24,8 @@
 LIB=/usr/local/lib/xinstall
 [ -r "$LIB/lib.sh" ] && . "$LIB/lib.sh" || exit 1
 require_root
-require hostapd 2>/dev/null || true
+command -v hostapd >/dev/null 2>&1 \
+    || say "note: hostapd not found - IPoE uses the dnsmasq backend, continuing." >&2
 
 CFG=/etc/xinstall/ipoe.conf
 mkdir -p /etc/xinstall
@@ -57,8 +58,11 @@ banner() {
 pick_ifaces() {
     say '  Available ethernet / vlan devices (nmcli):'
     _i=0
-    nmcli -t -f DEVICE,TYPE,STATE device show 2>/dev/null \
-        | awk -F: '$2=="ethernet"||$2=="vlan"{print $1}' | sort -u \
+    { nmcli -t -f DEVICE,TYPE device status 2>/dev/null \
+        | awk -F: '$2=="ethernet"||$2=="vlan"{print $1}'
+      nmcli -t -f NAME,TYPE connection show 2>/dev/null \
+        | awk -F: '$2=="vlan"{print $1}'
+    } | sort -u \
         | { while IFS= read -r _d; do _i=$((_i+1)); say "    $_i) $_d"; done; }
     say ""
     say '  Enter interface name(s) to serve (space separated): '

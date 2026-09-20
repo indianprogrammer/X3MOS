@@ -54,9 +54,12 @@ save_ifaces() {
 
 # ---- interface selection -------------------------------------------------------
 pick_ifaces() {
-    available=$(nmcli -t -f DEVICE,TYPE,STATE device show 2>/dev/null \
-        | awk -F: '$2=="ethernet" || $2=="vlan" {print $1}' \
-        | sort -u 2>/dev/null)
+    available=$( {
+        nmcli -t -f DEVICE,TYPE device status 2>/dev/null \
+            | awk -F: '$2=="ethernet" || $2=="vlan" {print $1}'
+        nmcli -t -f NAME,TYPE connection show 2>/dev/null \
+            | awk -F: '$2=="vlan" {print $1}'
+    } | sort -u 2>/dev/null)
     _n=0
     for d in $available; do _n=$((_n + 1)); say "    $_n) $d"; done
     [ -n "$available" ] || say "    (no ethernet/vlan interfaces found via nmcli)"
