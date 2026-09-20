@@ -32,17 +32,41 @@ parent_devices() {
 
 valid_vid() { [ "$1" -ge 1 ] 2>/dev/null && [ "$1" -le 4094 ] 2>/dev/null; }
 
+# nth - print the Nth positional parameter (1-based). POSIX substitute for
+# bash indexed-array access "${arr[$k]}", usable by both dash and bash.
+nth() {
+    _n=$1; shift
+    for _x do
+        [ "$_n" -eq 1 ] && { printf '%s\n' "$_x"; return 0; }
+        _n=$((_n - 1))
+    done
+    return 1
+}
+
+# collect - run $1, store its line-output as positional params ($1..$n).
+# dash has no arrays, so this replaces mapfile+process-substitution.
+collect() {
+    _c_tmp=$(mktemp) || return 1
+    "$1" > "$_c_tmp"
+    set --
+    while IFS= read -r _c_line; do
+        set -- "$@" "$_c_line"
+    done < "$_c_tmp"
+    rm -f "$_c_tmp"
+}
+
 cmd_add_vlan() {
     say "==> Add a VLAN tagged interface"
-    mapfile -t parents < <(parent_devices)
-    if [ ${#parents[@]} -eq 0 ]; then
+    set -- $(parent_devices)
+    collect parent_devices
+    if [ "$#" -eq 0 ]; then
         say "    no ethernet/bond/bridge devices found under NetworkManager"
         say "    is NetworkManager active? (option 1 enables it)"
     else
         say ""
         say "    parent interfaces:"
         i=1
-        for p in "${parents[@]}"; do
+        for p in "$@"; do
             say "      [$i] $p  ($(nmcli -g GENERAL.STATE device show "$p" 2>/dev/null || echo unknown))"
             i=$((i+1))
         done
@@ -62,7 +86,7 @@ cmd_add_vlan() {
                     ;;
                 *)
                     [ "$pick" -ge 1 ] 2>/dev/null && [ "$pick" -le "$i" ] 2>/dev/null \
-                        && parent="${parents[$((pick-1))]}" && break
+                        && parent=$(nth "$pick" "$@") && break
                     say "    invalid choice"
                     ;;
             esac
@@ -135,14 +159,14 @@ cmd_add_vlan() {
 
 cmd_delete_vlan() {
     say "==> Delete a VLAN interface"
-    mapfile -t vconns < <(vlan_connections)
-    if [ ${#vconns[@]} -eq 0 ]; then
+    set -- $(vlan_connections)
+    if [ "$#" -eq 0 ]; then
         say "    no VLAN connections configured."
         return 0
     fi
     say ""
     i=1
-    for c in "${vconns[@]}"; do
+    for c in "$@"; do
         say "      [$i] $c"
         i=$((i+1))
     done
@@ -155,8 +179,8 @@ cmd_delete_vlan() {
             "$i") return 0;;
             *)
                 if [ "$pick" -ge 1 ] 2>/dev/null && [ "$pick" -lt "$i" ] 2>/dev/null; then
-                    nmcli connection delete "${vconns[$((pick-1))]}" \
-                        && say "    deleted ${vconns[$((pick-1))]}."
+                    nmcli connection delete "$(nth "$pick" "$@")" \
+                        && say "    deleted $(vlan_nth "$pick")."
                     return 0
                 fi
                 say "    invalid choice"
@@ -168,13 +192,13 @@ cmd_delete_vlan() {
 cmd_show_vlan() {
     say "==> VLAN interfaces (NetworkManager)"
     say ""
-    mapfile -t vconns < <(vlan_connections)
-    if [ ${#vconns[@]} -eq 0 ]; then
+    set -- $(vlan_connections)
+    if [ "$#" -eq 0 ]; then
         say "    no VLAN connections configured."
         return 0
     fi
     printf '    %-16s %-12s %-5s %-10s %s\n' NAME DEVICE ID PARENT ADDRESS
-    for c in "${vconns[@]}"; do
+    for c in "$@"; do
         dev=$(nmcli -g connection.interface-name connection show "$c" 2>/dev/null | grep -v '^$' | head -1)
         [ -z "$dev" ] && dev="-"
         vid=$(nmcli -g vlan.id connection show "$c" 2>/dev/null | grep -v '^$' | head -1)

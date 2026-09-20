@@ -108,8 +108,8 @@ else
 fi
 
 ip2int() {
-    IFS=. read -r a b c d <<< "$1"
-    printf '%d\n' $(( (a<<24) + (b<<16) + (c<<8) + d ))
+    _sip_ifs=$IFS; IFS=.; set -- $1; IFS=$_sip_ifs
+    printf '%d\n' $(( ($1<<24) + ($2<<16) + ($3<<8) + $4 ))
 }
 int2ip() {
     local v=$1
