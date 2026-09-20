@@ -63,6 +63,13 @@ It is tested in VirtualBox (VGA and serial console).
   (no `systemd-resolved`, so nothing steals DNS). The old
   `dhclient-all.service` was dropped from the `chroot/` overlay so no second
   DHCP client races NetworkManager.
+- **VLAN interfaces**: `xinstall` option 2 manages IEEE 802.1Q tagged links
+  as NetworkManager `vlan` connection profiles (`nmcli connection add type
+  vlan dev <parent> id <vid>`), so the tagged interface comes up alongside
+  the still-NM-managed physical link — no `systemd-networkd`, no race. The
+  submenu lets you add a VLAN (pick the parent device, VLAN ID, then DHCP or
+  static IP/CIDR + gateway + DNS), delete one, or list the existing tagged
+  interfaces with their IPv4 addresses.
 - **Login banner**: the console login prompt shows an `X3M-OS` ASCII-art
   banner from `/etc/issue` (via getty).
 - **Target overlay (`chroot/`)**: any file placed under `chroot/` is copied
@@ -235,29 +242,34 @@ $ xinstall
       fresh X3M-OS installs), then shows device status and the main
       nmcli/nmtui commands for managing wifi/ethernet connections.
 
-  [2] Install Docker Engine          (status: not installed)
+  [2] Manage VLAN interfaces      (status: not configured)
+      802.1Q tagged links on a physical interface, created as
+      NetworkManager vlan profiles so the tagged link and the still
+      NM-managed physical interface coexist (no systemd-networkd).
+
+  [3] Install Docker Engine          (status: not installed)
       Adds Docker's official apt repository, installs docker-ce,
       containerd.io and the compose/buildx plugins, enables the
       service and adds your user to the 'docker' group.
       Guide: https://docs.docker.com/engine/install/debian/
 
-  [3] Install Ookla Speedtest Server (status: not installed)
+  [4] Install Ookla Speedtest Server (status: not installed)
       Downloads and runs the official ooklaserver.sh, installs the
       daemon under /opt/ooklaserver and registers a systemd unit
       so it auto-starts at boot (listens on TCP 8080).
       Guide: https://srijit.com/ookla-speedtest-server-installation-guide/
 
-  [4] Install ISP CGNAT              (status: not installed)
+  [5] Install ISP CGNAT              (status: not installed)
       Asks for the public IP pool, private IP pool and NATLOG server,
       then installs nftables NAT44 + ulogd2/rsyslog logging with
       conntrack tuning and fq_codel QoS (see cgnat.md).
 
-  [5] Install BGP Router (FRR)     (status: not installed)
+  [6] Install BGP Router (FRR)     (status: not installed)
       Installs frr, enables the zebra and bgpd daemons, starts
       frr.service and opens vtysh so BGP neighbors and advertised
       networks can be configured interactively.
 
-  [6] Quit
+  [7] Quit
 ```
 
 - Runs as the normal user (`x3m`) and re-executes itself under sudo for the
@@ -267,6 +279,15 @@ $ xinstall
   `scripts/build-installer.sh`). The menu option (re)installs it if missing,
   enables the `NetworkManager` service and prints `nmcli device status` plus a
   usage hint (wifi scan/connect, connection bring-up, `nmcli`/`nmtui`).
+- **VLAN** creates `vlan` connection profiles via `nmcli` (the parent device
+  stays under NetworkManager — systemd-networkd is deliberately not used, so
+  nothing second-guesses NM's ownership of the physical link). The submenu
+  lists eligible parent devices (ethernet/bond/team/bridge) with their state,
+  validates the VLAN ID (1-4094) and, for static IPs, requires `IP/prefixlen`
+  (gateway and DNS optional); DHCP mode leaves the address up to the VLAN's
+  own DHCP server. Deleting a profile tears the tagged interface down with it.
+  The overlay's `chroot/usr/local/lib/xinstall/install-vlan.sh` implements the
+  submenu.
 - **Docker** follows the "Install using the apt repository" method: removes
   conflicting packages, adds the GPG key + `docker.sources`, installs
   `docker-ce docker-ce-cli containerd.io docker-buildx-plugin
@@ -312,9 +333,9 @@ $ xinstall
   `masquerade` there.
 - The pieces live in `chroot/usr/local/bin/xinstall` (menu) and
   `chroot/usr/local/lib/xinstall/` (`lib.sh`, `install-nmcli.sh`,
-  `install-docker.sh`, `install-speedtest.sh`, `install-cgnat.sh`,
-  `install-bgp.sh`); they are applied via the `chroot/` overlay, so rebuild
-  the ISO after changing them.
+  `install-vlan.sh`, `install-docker.sh`, `install-speedtest.sh`,
+  `install-cgnat.sh`, `install-bgp.sh`); they are applied via the `chroot/`
+  overlay, so rebuild the ISO after changing them.
 
 ---
 

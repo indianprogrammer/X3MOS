@@ -31,6 +31,7 @@ apty() {
 export DEBIAN_FRONTEND=noninteractive
 
 say "==> Installing FRRouting (frr)..."
+apt-get update || die "apt-get update failed (check apt sources)"
 apty install -y frr || die "apt-get install frr failed"
 
 DAEMONS=/etc/frr/daemons

@@ -3,30 +3,48 @@
 #
 #   xinstall
 #
-# Options:
-#   1) NetworkManager / nmcli  (ensure installed/enabled, show device status)
-#   2) Docker Engine on Debian (https://docs.docker.com/engine/install/debian/)
-#   3) Ookla Speedtest Server  (https://srijit.com/ookla-speedtest-server-installation-guide/)
-#   4) ISP CGNAT               (reference: cgnat.md - nftables NAT44 + NATLOG)
-#   5) BGP Router (FRRouting)  (frr + frr-pythontools, opens vtysh)
+#   1) Install NetworkManager (nmcli,nmtui)
+#   2) Manage VLAN interfaces (802.1Q via nmcli)
+#   3) Install Docker Engine on Debian
+#   4) Install Ookla Speedtest Server
+#   5) Install ISP CGNAT (nftables NAT44)
+#   6) Install BGP Router (FRR)
+#   7) Quit
 #
 # Invoked by the normal (x3m) user. The menu re-executes itself under sudo
-# because every option performs a system-wide installation (nmcli manages the
-# NetworkManager service and needs root as well).
+# because every option performs a system-wide installation.
+#
+# SMALL CONSOLE HANDLING
+# ----------------------
+# The menu is paginated to the console height (detected via stty size, fallback
+# 24 rows). Each option is a single compact line and the list scrolls by page:
+# typing 'n' shows the next page, 'p' the previous one, so every option is
+# reachable even on a small terminal - nothing is ever lost or clipped.
 
 LIB=/usr/local/lib/xinstall
 [ -r "$LIB/lib.sh" ] && . "$LIB/lib.sh" || exit 1
 
 require_root
 
-BOLD=$([ -t 1 ] && tput bold 2>/dev/null || true)
-NORM=$([ -t 1 ] && tput sgr0 2>/dev/null || true)
+BOLD=$([ -t 0 ] && tput bold 2>/dev/null || true)
+NORM=$([ -t 0 ] && tput sgr0 2>/dev/null || true)
 
+# --- status probes -----------------------------------------------------------
 nmcli_status() {
-    if command -v nmcli >/dev/null 2>&1 && systemctl is-active NetworkManager >/dev/null 2>&1; then
+    if command -v nmcli >/dev/null 2>&1 \
+        && systemctl is-active NetworkManager >/dev/null 2>&1; then
         printf 'installed'
     else
         printf 'not installed'
+    fi
+}
+
+vlan_status() {
+    if command -v nmcli >/dev/null 2>&1 \
+        && nmcli -t -f TYPE connection show 2>/dev/null | grep -q '^vlan$'; then
+        printf 'configured'
+    else
+        printf 'not configured'
     fi
 }
 
@@ -47,7 +65,8 @@ speedtest_status() {
 }
 
 cgnat_status() {
-    if command -v nft >/dev/null 2>&1 && nft list tables ip 2>/dev/null | grep -q cgnat; then
+    if command -v nft >/dev/null 2>&1 \
+        && nft list tables ip 2>/dev/null | grep -q cgnat; then
         printf 'installed'
     else
         printf 'not installed'
@@ -63,40 +82,92 @@ bgp_status() {
     fi
 }
 
-while :; do
-    clear
-    printf '\n'
+# --- build the option list (one compact line each) ----------------------------
+# Each line: "  [N] <title>  .....  (<status>)".  Total length far below the
+# narrowest console, and the header below it is also compact.
+options_text() {
     printf '%s\n' \
-        "${BOLD}========================================================${NORM}" \
-        "${BOLD}              X3M-OS install menu${NORM}" \
-        "${BOLD}========================================================${NORM}" \
         '' \
-        "  [1] Install NetworkManager (nmcli,nmtui)  (status: $(nmcli_status))" \
-        "      nmcli commands for managing wifi/ethernet connections." \
+        "  [1] Install NetworkManager      .....  ($(nmcli_status))" \
+        "      nmcli/nmtui for wifi + ethernet" \
         '' \
-        "  [2] Install Docker Engine          (status: $(docker_status))" \
+        "  [2] Manage VLAN interfaces      .....  ($(vlan_status))" \
+        "      802.1Q tagged links via nmcli" \
         '' \
-        "  [3] Install Ookla Speedtest Server (status: $(speedtest_status))" \
-        "      Guide: https://srijit.com/ookla-speedtest-server-installation-guide/" \
+        "  [3] Install Docker Engine       .....  ($(docker_status))" \
+        "      containers on Debian 12/13" \
         '' \
-        "  [4] Install ISP CGNAT              (status: $(cgnat_status))" \
+        "  [4] Install Ookla Speedtest     .....  ($(speedtest_status))" \
+        "      guides: srijit.com + ooklaserver" \
         '' \
-        "  [5] Install BGP Router (FRR)     (status: $(bgp_status))" \
+        "  [5] Install ISP CGNAT (NAT44)   .....  ($(cgnat_status))" \
+        "      nftables nsrc + NATLOG" \
         '' \
-        '  [6] Quit' \
+        "  [6] Install BGP Router (FRR)    .....  ($(bgp_status))" \
+        "      frr + frr-pythontools" \
+        ''
+}
+
+# page_rows() -> number of option+description lines that fit per page
+page_rows() {
+    rows=$(stty size 2>/dev/null | awk '{print $1; exit}')
+    [ -n "$rows" ] && [ "$rows" -gt 10 ] 2>/dev/null || rows=24
+    # header(5) + prompt(3) + pp-footer(3) reserved -> leaves rows-11 for options
+    per=$((rows - 11))
+    [ "$per" -lt 4 ] && per=4
+    printf '%s' "$per"
+}
+
+# paginate <page> : print only the slice [start..start+per) of option lines
+paginate() {
+    p=$1; per=$2; start=$(( (p - 1) * per + 1 )); end=$(( start + per - 1 )); i=0
+    options_text | {
+        while IFS= read -r line; do
+            i=$((i + 1))
+            [ "$i" -lt "$start" ] && continue
+            [ "$i" -gt "$end" ] && break
+            printf '%s\n' "$line"
+        done
+    }
+}
+
+plainopts=$(options_text)
+total=$(printf '%s\n' "$plainopts" | wc -l | tr -d ' ')
+
+page=1
+while :; do
+    per=$(page_rows)
+    pages=$(( (total + per - 1) / per ))
+    [ "$page" -gt "$pages" ] && page=$pages
+
+    clear
+    printf '%s\n' \
+        "${BOLD}====================================================${NORM}" \
+        "${BOLD}               X3M-OS install menu${NORM}" \
+        "${BOLD}====================================================${NORM}" \
         ''
 
-    printf 'Choose an option [1-6]: '
-    read -r choice
+    paginate "$page" "$per"
+
+    printf '%s\n' \
+        '' \
+        '  [n] next page    [p] previous page    [q] quit'
+    printf '%s' '  Choose an option: '
+    read -r choice 2>/dev/null || choice=q
+
     case "$choice" in
+        q|Q|0) clear; exit 0;;
+        n|N) page=$((page + 1)); [ "$page" -gt "$pages" ] && page=$pages; continue;;
+        p|P) page=$((page - 1)); [ "$page" -lt 1 ] && page=1; continue;;
         1) "$LIB/install-nmcli.sh";;
-        2) "$LIB/install-docker.sh";;
-        3) "$LIB/install-speedtest.sh";;
-        4) "$LIB/install-cgnat.sh";;
-        5) "$LIB/install-bgp.sh";;
-        6) exit 0;;
+        2) "$LIB/install-vlan.sh";;
+        3) "$LIB/install-docker.sh";;
+        4) "$LIB/install-speedtest.sh";;
+        5) "$LIB/install-cgnat.sh";;
+        6) "$LIB/install-bgp.sh";;
+        7) clear; exit 0;;
         *) continue;;
     esac
-    printf '\nPress ENTER to return to the menu...'
+    printf '\n  Press ENTER to return to the menu...'
     read -r _ 2>/dev/null || true
 done
