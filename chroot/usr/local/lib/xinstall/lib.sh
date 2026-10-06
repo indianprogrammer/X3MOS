@@ -137,3 +137,11 @@ ipoe_status() {
         printf 'not installed'
     fi
 }
+
+ntp_status() {
+    if command -v ntpd >/dev/null 2>&1 || [ -f /etc/ntpsec/ntp.conf ]; then
+        printf 'installed'
+    else
+        printf 'not installed'
+    fi
+}

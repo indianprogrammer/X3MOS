@@ -5,11 +5,10 @@
 #
 #   1) Install NetworkManager (nmcli,nmtui)
 #   2) Manage VLAN interfaces (802.1Q via nmcli)
-#   3) Install Docker Engine on Debian
-#   4) Install Ookla Speedtest Server
-#   5) Install ISP CGNAT (nftables NAT44)
-#   6) Install BGP Router (FRR)
-#   7) Quit
+#   7) Install Docker Engine on Debian
+#   8) Install Ookla Speedtest Server
+#   9) Install NTP Server (ntpsec)
+#   10) Quit
 #
 # Invoked by the normal (x3m) user. The menu re-executes itself under sudo
 # because every option performs a system-wide installation.
@@ -111,6 +110,9 @@ options_text() {
         '' \
         "  [8] Install Ookla Speedtest     .....  ($(speedtest_status))" \
         "      guides: srijit.com + ooklaserver" \
+        '' \
+        "  [9] Install NTP Server          .....  ($(ntp_status))" \
+        "      ntpsec time server" \
         ''
 }
 
@@ -173,7 +175,8 @@ while :; do
         6) "$LIB/install-ipoe.sh";;
         7) "$LIB/install-docker.sh";;
         8) "$LIB/install-speedtest.sh";;
-        9) clear; exit 0;;
+        9) "$LIB/install-ntp.sh";;
+        10) clear; exit 0;;
         *) continue;;
     esac
     printf '\n  Press ENTER to return to the menu...'

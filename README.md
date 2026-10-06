@@ -17,7 +17,7 @@ It is tested in VirtualBox (VGA and serial console).
 - **Boots directly into the Debian Installer** (no live system / squashfs).
 - **Fully unattended** when the preseed defaults match your disk layout
   (hostname `X3MOS`, single ENTIRE-disk partition on `/dev/sda`, root/`x3m`
-  with password `x3m@root`, English/India/US keyboard, UTC).
+  with password `x3m@root`, English/India/US keyboard, Asia/Kolkata).
   Boot label `auto` runs with `auto=true priority=critical` (zero prompts);
   `install` shows the same questions pre-filled (press Enter to confirm).
 - **100% offline**: netcfg disabled, mirror = `cdrom`, apt-setup disabled,
@@ -97,7 +97,7 @@ Installed and used by the installer:
 | User password  | `x3m@root`       |
 | User groups    | `sudo` (plus defaults) |
 | Keymap         | US English       |
-| Timezone       | UTC              |
+| Timezone       | `Asia/Kolkata`   |
 
 **In tests/real machines change nothing unless you want these defaults.**
 
