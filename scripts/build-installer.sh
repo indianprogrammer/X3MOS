@@ -40,7 +40,7 @@ MIRROR="http://deb.debian.org/debian"
 SUITE="trixie"
 ARCH="amd64"
 INSTALLER_BASE="$MIRROR/dists/$SUITE/main/installer-$ARCH/current/images"
-ISO_NAME="debian-trixie-netinst-amd64.iso"
+ISO_NAME="${SDK_ISO_NAME:-debian-trixie-netinst-amd64.iso}"
 VOLUME="DEBIAN_TRIXIE_NETINST"
 WORK_DIR="$PROJECT_DIR/.installer-build"
 
