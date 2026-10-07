@@ -35,17 +35,20 @@ It is tested in VirtualBox (VGA and serial console).
   account (root login is also enabled).
 - **`xinstall` install menu**: running `xinstall` on the installed system
   opens an interactive menu with **NetworkManager / nmcli** (installed/enabled
-  on fresh installs; shows device status + usage hint), **Docker Engine**
-  (Docker's apt repository method, per `docs.docker.com`), an **Ookla Speedtest
-  Server** (official `ooklaserver.sh` into `/opt/ooklaserver` with a systemd
-  auto-start unit, per Srijit Banerjee's guide), or an **ISP CGNAT** (nftables
-  NAT44 + ulogd2/rsyslog NAT logging per `cgnat.md`, asking for the public IP
-  pool, private IP pool and NATLOG server at install time), or a **BGP
-  Router** (FRRouting `frr` with the zebra/bgpd daemons enabled, dropping into
-  `vtysh`). Runs as the normal user; elevates via sudo automatically. The menu
-  **auto-starts at interactive console login** for `root`/`x3m` (skipped over
-  SSH): disable per session with `XINSTALL_SKIP=1` or permanently with
-  `touch /etc/xinstall-no-autorun`.
+  on fresh installs; shows device status + usage hint), **VLAN** (802.1Q tagged
+  links as NetworkManager profiles), a **BGP Router** (FRRouting `frr` with
+  the zebra/bgpd daemons enabled, dropping into `vtysh`), an **ISP CGNAT**
+  (nftables NAT44 + ulogd2/rsyslog NAT logging per `cgnat.md`, asking for the
+  public IP pool, private IP pool and NATLOG server at install time), a
+  **PPPoE access server** (local PAP/CHAP users, optional RADIUS, webhook),
+  an **IPoE access server** (dnsmasq DHCP pools + MAC reservations, webhook),
+  **Docker Engine** (Docker's apt repository method, per `docs.docker.com`),
+  an **Ookla Speedtest Server** (official `ooklaserver.sh` into
+  `/opt/ooklaserver` with a systemd auto-start unit, per Srijit Banerjee's
+  guide), or an **NTP Server** (`ntpsec`, enabled at boot). Runs as the normal
+  user; elevates via sudo automatically. The menu **auto-starts at interactive
+  console login** for `root`/`x3m` (skipped over SSH): disable per session with
+  `XINSTALL_SKIP=1` or permanently with `touch /etc/xinstall-no-autorun`.
 - **Passwordless sudo for xinstall**: the overlay ships a sudoers drop-in
   (`/etc/sudoers.d/xinstall`, mode 0440) granting the `sudo` group NOPASSWD
   for exactly `/usr/local/bin/xinstall` and `/usr/local/lib/xinstall/*` — the
@@ -130,9 +133,11 @@ produced by one script.
 sudo ./scripts/build-installer.sh
 ```
 
-Output: `debian-trixie-netinst-amd64.iso` (approx. 370 MB) plus
+Output: `x3mos_debian13.iso` (approx. 370 MB) plus
 `.installer-build/` (cached stage, deb pool, udeb pool, ISO staging) for fast
-incremental rebuilds.
+incremental rebuilds. The ISO filename follows `make menuconfig`
+(`CONFIG_SDK_ISO_NAME` in `.config`, also overridable per build with
+`make installer SDK_ISO_NAME=foo.iso`).
 
 | Option       | Effect                                              |
 |--------------|-----------------------------------------------------|
@@ -233,43 +238,36 @@ simple menu to install optional services:
 
 ```
 $ xinstall
-========================================================
-              X3M-OS install menu
-========================================================
+====================================================
+               X3M-OS install menu
+====================================================
 
-  [1] Install NetworkManager (nmcli,nmtui)  (status: installed)
-      Ensures NetworkManager is installed and enabled (preinstalled on
-      fresh X3M-OS installs), then shows device status and the main
-      nmcli/nmtui commands for managing wifi/ethernet connections.
+  [1] Install NetworkManager      .....  (installed)
+      nmcli/nmtui for wifi + ethernet
 
-  [2] Manage VLAN interfaces      (status: not configured)
-      802.1Q tagged links on a physical interface, created as
-      NetworkManager vlan profiles so the tagged link and the still
-      NM-managed physical interface coexist (no systemd-networkd).
+  [2] Manage VLAN interfaces      .....  (not configured)
+      802.1Q tagged links via nmcli
 
-  [3] Install Docker Engine          (status: not installed)
-      Adds Docker's official apt repository, installs docker-ce,
-      containerd.io and the compose/buildx plugins, enables the
-      service and adds your user to the 'docker' group.
-      Guide: https://docs.docker.com/engine/install/debian/
+  [3] Install BGP Router (FRR)    .....  (not installed)
+      frr + frr-pythontools
 
-  [4] Install Ookla Speedtest Server (status: not installed)
-      Downloads and runs the official ooklaserver.sh, installs the
-      daemon under /opt/ooklaserver and registers a systemd unit
-      so it auto-starts at boot (listens on TCP 8080).
-      Guide: https://srijit.com/ookla-speedtest-server-installation-guide/
+  [4] Install ISP CGNAT (NAT44)   .....  (not installed)
+      nftables nsrc + NATLOG
 
-  [5] Install ISP CGNAT              (status: not installed)
-      Asks for the public IP pool, private IP pool and NATLOG server,
-      then installs nftables NAT44 + ulogd2/rsyslog logging with
-      conntrack tuning and fq_codel QoS (see cgnat.md).
+  [5] Install PPPoE server        .....  (not installed)
+      broadband access server on one or more interfaces
 
-  [6] Install BGP Router (FRR)     (status: not installed)
-      Installs frr, enables the zebra and bgpd daemons, starts
-      frr.service and opens vtysh so BGP neighbors and advertised
-      networks can be configured interactively.
+  [6] Install IPoE server         .....  (not installed)
+      broadcast-IP-over-Ethernet access
 
-  [7] Quit
+  [7] Install Docker Engine       .....  (not installed)
+      containers on Debian 12/13
+
+  [8] Install Ookla Speedtest     .....  (not installed)
+      guides: srijit.com + ooklaserver
+
+  [9] Install NTP Server          .....  (not installed)
+      ntpsec time server
 ```
 
 - Runs as the normal user (`x3m`) and re-executes itself under sudo for the
@@ -331,10 +329,24 @@ $ xinstall
   output needs `oob.*` keys only the packet-NFLOG input provides); the
   hairpinning rule also lives in postrouting because nftables only allows
   `masquerade` there.
+- **PPPoE** installs a broadband access server (`pppoe-server`) on one or
+  more interfaces (a VLAN created via option 2 can be served directly), with
+  local PAP/CHAP users in `/etc/ppp/chap-secrets`, optional RADIUS
+  (RADIUS first, local fallback, toggleable), and an optional webhook posting
+  every connect/disconnect/failure. Per-interface
+  `pppoe-server@<iface>.service` units are enabled at boot.
+- **IPoE** installs a broadcast-IP-over-Ethernet access server: `dnsmasq`
+  running a small DHCP server per selected interface, with a local address
+  pool, fixed per-subscriber assignments by MAC, optional RADIUS and an
+  optional webhook for every DHCP event. State persists in
+  `/etc/xinstall/ipoe.conf`; units are enabled at boot.
+- **NTP** installs the `ntpsec` time server from the live Debian sources,
+  enables `ntpsec.service` at boot and prints `ntpq -p` peers on success.
 - The pieces live in `chroot/usr/local/bin/xinstall` (menu) and
   `chroot/usr/local/lib/xinstall/` (`lib.sh`, `install-nmcli.sh`,
-  `install-vlan.sh`, `install-docker.sh`, `install-speedtest.sh`,
-  `install-cgnat.sh`, `install-bgp.sh`); they are applied via the `chroot/`
+  `install-vlan.sh`, `install-bgp.sh`, `install-cgnat.sh`,
+  `install-pppoe.sh`, `install-ipoe.sh`, `install-docker.sh`,
+  `install-speedtest.sh`, `install-ntp.sh`); they are applied via the `chroot/`
   overlay, so rebuild the ISO after changing them.
 
 ---
@@ -378,8 +390,9 @@ chroot/                      target overlay: files copied verbatim onto the
 patches/
   usr/share/press-to-reboot/ first-boot credentials banner + systemd unit
   usr/lib/apt-setup/generators/40cdrom  VirtualBox-safe apt-source writer
+  usr/bin/apt-setup              skip no-op (falls through to pkgsel/grub)
 .installer-build/            build cache (gitignored): stage, pool, iso/
-debian-trixie-netinst-amd64.iso  build output (gitignored ISO)
+x3mos_debian13.iso           build output (gitignored ISO, name from menuconfig)
 ```
 
 ---
